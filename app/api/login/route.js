@@ -1,42 +1,41 @@
 import { NextResponse } from "next/server";
-import crypto from "crypto";
+import { findUser, verifyPassword, signToken, normalizeUsername } from "../../../lib/users";
+import { bump, peek, drop } from "../../../lib/store";
 
-/* Просте, але справжнє серверне логування за іменем і паролем.
-   Дозволено декілька паролів одразу — задаються змінною середовища
-   APP_PASSWORDS, через кому або з нового рядка (напр. "пароль1, пароль2").
-   Для сумісності підтримується і стара змінна APP_PASSWORD (один пароль).
-   Після успішного входу сервер видає підписаний токен (HMAC), який далі
-   передається як звичайний Bearer-токен — так само, як токен від Google. */
+export const dynamic = "force-dynamic";
 
-const RAW = process.env.APP_PASSWORDS || process.env.APP_PASSWORD || "";
-const VALID_PASSWORDS = RAW.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
-const SECRET = RAW;
-
-function sign(name) {
-  const exp = Date.now() + 1000 * 60 * 60 * 24 * 30;
-  const payload = Buffer.from(JSON.stringify({ name, exp })).toString("base64url");
-  const sig = crypto.createHmac("sha256", SECRET).update(payload).digest("base64url");
-  return payload + "." + sig;
-}
+/* Вхід за особистим логіном і паролем. Ім'я й роль людина не обирає —
+вони беруться з її облікового запису. Після 8 невдалих спроб логін
+блокується на 15 хвилин. */
+const MAX_FAILS = 8;
+const LOCK_SECONDS = 15 * 60;
 
 export async function POST(request) {
-  if (!VALID_PASSWORDS.length) {
-    return NextResponse.json(
-      { error: "Сервер не налаштований: задайте APP_PASSWORDS у Environment Variables." },
-      { status: 500 }
-    );
-  }
   let body;
-  try {
-    body = await request.json();
-  } catch (e) {
-    return NextResponse.json({ error: "Некоректний запит." }, { status: 400 });
+  try { body = await request.json(); }
+  catch (e) { return NextResponse.json({ error: "Некоректний запит." }, { status: 400 }); }
+
+  const username = normalizeUsername(body?.username);
+  const password = String(body?.password || "");
+  if (!username || !password) return NextResponse.json({ error: "Вкажіть логін і пароль." }, { status: 400 });
+
+  const failKey = "transfers:loginfail:" + username;
+  if ((await peek(failKey)) >= MAX_FAILS) {
+    return NextResponse.json({ error: "Забагато невдалих спроб. Спробуйте за 15 хвилин або попросіть адміністратора скинути пароль." }, { status: 429 });
   }
-  const name = (body?.name || "").trim();
-  const password = body?.password || "";
-  if (!name) return NextResponse.json({ error: "Вкажіть ім'я." }, { status: 400 });
-  if (!VALID_PASSWORDS.includes(password)) {
-    return NextResponse.json({ error: "Невірний пароль." }, { status: 401 });
+
+  const user = await findUser(username);
+  const ok = verifyPassword(password, user?.salt, user?.passwordHash);
+  if (!user || !ok) {
+    await bump(failKey, LOCK_SECONDS);
+    return NextResponse.json({ error: "Невірний логін або пароль." }, { status: 401 });
   }
-  return NextResponse.json({ token: sign(name), name });
+  await drop(failKey);
+
+  return NextResponse.json({
+    token: signToken(user),
+    username: user.username,
+    name: user.displayName,
+    isAdmin: !!user.isAdmin,
+  });
 }
