@@ -447,7 +447,7 @@ export default function TransferDesk() {
 
   useEffect(() => {
     if (!ready || !user) return;
-    const id = setInterval(() => { if (!document.hidden) syncNow(true); }, 20000);
+    const id = setInterval(() => { if (!document.hidden) syncNow(true); }, 60000);
     return () => clearInterval(id);
   }, [ready, user]);
 
