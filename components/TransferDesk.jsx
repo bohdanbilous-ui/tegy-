@@ -327,6 +327,8 @@ export default function TransferDesk() {
   const [loginName, setLoginName] = useState("");
   const [loginPick, setLoginPick] = useState("");
   const [loginError, setLoginError] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginBusy, setLoginBusy] = useState(false);
   const [googleReady, setGoogleReady] = useState(false);
   const googleBtn = useRef(null);
 
@@ -1224,16 +1226,36 @@ export default function TransferDesk() {
             <input id="newwho" type="text" value={loginName} onChange={(e) => { setLoginName(e.target.value); setLoginPick(""); }}
               onKeyDown={(e) => e.key === "Enter" && enter()} placeholder="Ім'я та прізвище" />
           </div>
+                    <div style={{ marginTop: 14 }}>
+            <label style={label} htmlFor="pwd">Пароль</label>
+            <input id="pwd" type="password" value={loginPassword} onChange={(e) => { setLoginPassword(e.target.value); setLoginError(""); }}
+              onKeyDown={(e) => e.key === "Enter" && enter()} placeholder="Пароль" />
+          </div>
           {loginError && <p role="alert" style={{ marginTop: 12, marginBottom: 0, color: C.stop }}>{loginError}</p>}
-          <button onClick={enter} style={{ ...addBtn, background: C.signal, width: "100%", padding: "12px 16px", marginTop: 18, fontWeight: 600 }}>Увійти</button>
+          <button onClick={enter} disabled={loginBusy} style={{ ...addBtn, background: C.signal, width: "100%", padding: "12px 16px", marginTop: 18, fontWeight: 600, opacity: loginBusy ? 0.6 : 1 }}>{loginBusy ? "Входимо…" : "Увійти"}</button>
         </div>
       </div>
     );
   }
-  function enter() {
+  async function enter() {
     const n = (loginPick || loginName).trim();
     if (!n) return setLoginError("Оберіть себе зі списку або впишіть ім'я.");
-    signIn({ name: n, email: "", source: "manual" });
+    if (!loginPassword) return setLoginError("Введіть пароль.");
+    setLoginBusy(true);
+    try {
+      const res = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: n, password: loginPassword }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setLoginError(data.error || "Не вдалося увійти."); return; }
+      signIn({ name: n, email: "", source: "manual", token: data.token });
+    } catch (e) {
+      setLoginError("Немає з'єднання з сервером.");
+    } finally {
+      setLoginBusy(false);
+    }
   }
 
   return (
