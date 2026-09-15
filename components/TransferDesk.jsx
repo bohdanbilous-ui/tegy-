@@ -3,6 +3,7 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
 import { mergeState, nowISO, uniq } from "../lib/merge";
 import { api } from "../lib/api";
+import TeamDesk from "./TeamDesk";
 
 /* Вхід через Google: NEXT_PUBLIC_GOOGLE_CLIENT_ID і NEXT_PUBLIC_ALLOWED_DOMAIN.
    Токен перевіряється на сервері (app/api/state/route.js). */
@@ -414,7 +415,7 @@ export default function TransferDesk() {
   }
 
   useEffect(() => {
-    if (!ready || !user) return;
+    if (!ready || !user || !user.isAdmin) return;
     (async () => {
       try {
         const remote = await api.get({ token: tokenRef.current, name: user.name });
@@ -428,7 +429,7 @@ export default function TransferDesk() {
   }, [ready, user]);
 
   async function syncNow(silent) {
-    if (!user) return;
+    if (!user || !user.isAdmin) return;
     try {
       if (!silent) setSyncState("saving");
       const merged = await api.put({ token: tokenRef.current, name: user.name }, stateRef.current);
@@ -439,14 +440,14 @@ export default function TransferDesk() {
   }
 
   useEffect(() => {
-    if (!ready || !user) return;
+    if (!ready || !user || !user.isAdmin) return;
     if (JSON.stringify(snap()) === lastSync.current) return;
     const id = setTimeout(() => syncNow(false), 700);
     return () => clearTimeout(id);
   }, [employees, projects, partners, reasons, transfers, admins, log, deleted, pms, codes, teams, entries, settings, ready, user]);
 
   useEffect(() => {
-    if (!ready || !user) return;
+    if (!ready || !user || !user.isAdmin) return;
     const id = setInterval(() => { if (!document.hidden) syncNow(true); }, 60000);
     return () => clearInterval(id);
   }, [ready, user]);
@@ -484,7 +485,7 @@ export default function TransferDesk() {
               setLoginError("Увійти можна лише з акаунта @" + ALLOWED_DOMAIN + ".");
               return;
             }
-            signIn({ name: p.name || p.email, email: p.email || "", source: "google", token: res.credential });
+            signIn({ name: p.name || p.email, email: p.email || "", source: "google", token: res.credential, isAdmin: false });
           } catch (e) { setLoginError("Не вдалося розібрати відповідь Google."); }
         },
       });
@@ -506,19 +507,16 @@ export default function TransferDesk() {
     tokenRef.current = u.token || "";
     setUser({ ...u, signedInAt: new Date().toISOString() });
     setLoginError("");
-    if (u.name && !partners.some((p) => p.toLowerCase() === u.name.toLowerCase())) setPartners((p) => [...p, u.name]);
-    if (admins.length === 0 && u.name) {
-      setAdmins([u.name]); untomb("a:" + u.name);
-      setToast(u.name + " — перший, хто увійшов, тому отримує права адміністратора. Решту призначайте в довіднику.");
-    }
   }
   function signOut() { tokenRef.current = ""; setUser(null); setLoginPick(""); setLoginName(""); lastSync.current = ""; }
 
   /* ─── права ─────────────────────────────────────────────────────────────
      Розмежування працює в інтерфейсі: воно захищає від випадкових правок
      чужих записів, але не від того, хто відкриє консоль браузера. Справжній
-     захист дає бекенд, який перевіряє, хто робить запит. ─────────────────── */
-  const isAdmin = !!user && admins.some((a) => a.toLowerCase() === user.name.toLowerCase());
+     захист дає бекенд, який перевіряє, хто робить запит. Хто адміністратор,
+     а хто — відповідальний лише за свою команду, вирішується на сервері за
+     обліковим записом (lib/users.js), а не тут. ─────────────────────────── */
+  const isAdmin = !!user && !!user.isAdmin;
   const allPMs = useMemo(() => uniq(Object.values(pms)), [pms]);
   const isPMof = (project) => !!user && (pms[project] || "").toLowerCase() === user.name.toLowerCase();
   const canDecide = (a) => isAdmin || isPMof(a.project);
@@ -1038,14 +1036,6 @@ export default function TransferDesk() {
     setAdmins((p) => p.map((x) => (x === oldName ? name : x)));
     if (user?.name === oldName) setUser((u) => ({ ...u, name }));
   }
-  function toggleAdmin(p) {
-    if (!isAdmin) return denied("призначати адміністраторів може лише адміністратор");
-    const on = admins.some((a) => a.toLowerCase() === p.toLowerCase());
-    if (on && admins.length === 1) return setListNote("Має лишитись хоча б один адміністратор.");
-    if (on) tomb("a:" + p); else untomb("a:" + p);
-    setAdmins((x) => (on ? x.filter((a) => a.toLowerCase() !== p.toLowerCase()) : [...x, p]));
-    pushLog(on ? "зняв права адміністратора" : "надав права адміністратора", p);
-  }
   function addPartner() {
     const n = newPartner.trim();
     if (!n) return setListNote("Впишіть ім'я People Partner.");
@@ -1055,8 +1045,6 @@ export default function TransferDesk() {
   function removePartner(p) {
     if (!isAdmin) return denied("прибирати People Partners може лише адміністратор");
     if (partners.length === 1) return setListNote("Має лишитись хоча б один People Partner.");
-    if (admins.length === 1 && admins[0].toLowerCase() === p.toLowerCase()) return setListNote("Це єдиний адміністратор — спершу призначте іншого.");
-    setAdmins((x) => x.filter((a) => a.toLowerCase() !== p.toLowerCase()));
     setPartners((x) => x.filter((v) => v !== p)); tomb("pp:" + p);
     setListNote(usesPartner(p) ? "Прибрано зі списку, в історії переведень ім'я лишилось." : "Прибрано зі списку.");
   }
@@ -1201,34 +1189,18 @@ export default function TransferDesk() {
         <style>{css}</style>
         <div style={{ ...card, padding: 28, width: "100%", maxWidth: 420 }}>
           <h1 style={{ margin: 0, fontFamily: SERIF, fontSize: 24, fontWeight: 600 }}>Переведення між проєктами</h1>
-          <p style={{ color: C.ink2, marginTop: 8 }}>Кожне переведення підписується вашим ім'ям, тож спершу представтесь.</p>
-
-          {GOOGLE_CLIENT_ID ? (
-            <div style={{ marginTop: 20 }}>
-              <div ref={googleBtn} />
-              {!googleReady && <p style={{ color: C.muted, fontSize: 12.5 }}>Готуємо вхід через Google…</p>}
-            </div>
-          ) : (
-            <p style={{ marginTop: 20, background: C.warnSoft, border: "1px solid #E6CFA6", borderRadius: 3, padding: "10px 12px", color: C.warn, fontSize: 12.5 }}>
-              Вхід через Google вимкнено: не задано NEXT_PUBLIC_GOOGLE_CLIENT_ID. Вхід за іменем годиться для перевірки, але даних не захищає.
-            </p>
-          )}
+          <p style={{ color: C.ink2, marginTop: 8 }}>Увійдіть під своїм обліковим записом.</p>
 
           <div style={{ marginTop: 20 }}>
-            <label style={label} htmlFor="who">Оберіть себе зі списку</label>
-            <select id="who" value={loginPick} onChange={(e) => { setLoginPick(e.target.value); setLoginName(""); }}>
-              <option value="">—</option>
-              {uniq([...partners, ...allPMs]).map((p) => <option key={p} value={p}>{p}</option>)}
-            </select>
+            <label style={label} htmlFor="username">Логін</label>
+            <input id="username" type="text" autoComplete="username" value={loginName}
+              onChange={(e) => { setLoginName(e.target.value); setLoginError(""); }}
+              onKeyDown={(e) => e.key === "Enter" && enter()} placeholder="напр. taras.mamai" />
           </div>
           <div style={{ marginTop: 14 }}>
-            <label style={label} htmlFor="newwho">Або впишіть ім'я, якщо вас ще немає</label>
-            <input id="newwho" type="text" value={loginName} onChange={(e) => { setLoginName(e.target.value); setLoginPick(""); }}
-              onKeyDown={(e) => e.key === "Enter" && enter()} placeholder="Ім'я та прізвище" />
-          </div>
-                    <div style={{ marginTop: 14 }}>
             <label style={label} htmlFor="pwd">Пароль</label>
-            <input id="pwd" type="password" value={loginPassword} onChange={(e) => { setLoginPassword(e.target.value); setLoginError(""); }}
+            <input id="pwd" type="password" autoComplete="current-password" value={loginPassword}
+              onChange={(e) => { setLoginPassword(e.target.value); setLoginError(""); }}
               onKeyDown={(e) => e.key === "Enter" && enter()} placeholder="Пароль" />
           </div>
           {loginError && <p role="alert" style={{ marginTop: 12, marginBottom: 0, color: C.stop }}>{loginError}</p>}
@@ -1238,24 +1210,35 @@ export default function TransferDesk() {
     );
   }
   async function enter() {
-    const n = (loginPick || loginName).trim();
-    if (!n) return setLoginError("Оберіть себе зі списку або впишіть ім'я.");
+    const n = loginName.trim();
+    if (!n) return setLoginError("Введіть логін.");
     if (!loginPassword) return setLoginError("Введіть пароль.");
     setLoginBusy(true);
     try {
       const res = await fetch("/api/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: n, password: loginPassword }),
+        body: JSON.stringify({ username: n, password: loginPassword }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setLoginError(data.error || "Не вдалося увійти."); return; }
-      signIn({ name: n, email: "", source: "manual", token: data.token });
+      signIn({ name: data.name, username: n.toLowerCase(), email: "", source: "manual", token: data.token, isAdmin: !!data.isAdmin });
     } catch (e) {
       setLoginError("Немає з'єднання з сервером.");
     } finally {
       setLoginBusy(false);
     }
+  }
+
+  if (!isAdmin) {
+    return (
+      <TeamDesk
+        user={user}
+        token={tokenRef.current}
+        onSignOut={signOut}
+        onApiError={onApiError}
+      />
+    );
   }
 
   return (
@@ -1987,7 +1970,7 @@ export default function TransferDesk() {
               <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
                 {[["emp", "Співробітники", employees.length], ["proj", "Проєкти", allProjects.length],
                   ["pp", "People Partners", partners.length], ["reason", "Підстави", allReasons.length],
-                  ["cfg", "Налаштування", ""]].map(([k, l, n]) => (
+                  ["users", "Користувачі", ""], ["cfg", "Налаштування", ""]].map(([k, l, n]) => (
                   <button key={k} onClick={() => setBook(k)} aria-current={book === k}
                     style={{ cursor: "pointer", border: "none", background: book === k ? C.ink : "transparent",
                       color: book === k ? "#fff" : C.ink2, padding: "10px 16px", borderRadius: 3, marginBottom: 6,
@@ -1997,6 +1980,8 @@ export default function TransferDesk() {
                 ))}
               </div>
             </section>
+
+            {book === "users" && <UsersBook token={tokenRef.current} me={user} />}
 
             {book === "emp" && (
               <>
@@ -2242,8 +2227,9 @@ export default function TransferDesk() {
                 <h2 style={{ margin: "28px 0 0", fontFamily: SERIF, fontSize: 20, fontWeight: 600 }}>Команди і відповідальні</h2>
                 <p style={{ margin: "6px 0 0", color: C.ink2 }}>
                   Відповідальний вносить відсотки залученості своєї команди. Люди прикріплюються на вкладці «Команди і теги»
-                  або колонкою «Команда» в таблиці співробітників.
-                </p>
+                  або колонкою «Команда» в таблиці співробітників. Ім'я відповідального має точно збігатися з іменем його
+                  облікового запису у вкладці «Користувачі» — інакше він побачить порожню команду.
+                  </p>
                 <div style={{ overflowX: "auto", marginTop: 12 }}>
                   <table>
                     <thead><tr><th>Команда</th><th style={{ width: 220 }}>Відповідальний за %</th><th style={{ width: 90 }}>Людей</th><th style={{ width: 44 }} /></tr></thead>
@@ -2283,33 +2269,23 @@ export default function TransferDesk() {
                 <div style={{ padding: "16px 18px", borderBottom: "1px solid " + C.lineSoft }}>
                   <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 20, fontWeight: 600 }}>People Partners</h2>
                   <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>
-                    Із цього списку люди обирають себе на вході. Кожен правит лише свої записи; адміністратор — будь-які.
+                    Список підказок для форми переведень. Це не логіни — керування обліковими записами й ролями тепер у вкладці «Користувачі».
                   </p>
                 </div>
                 {partners.length === 0 ? (
-                  <p style={{ padding: "36px 20px", margin: 0, color: C.muted, textAlign: "center" }}>Поки що нікого. Той, хто входить під новим ім'ям, додається сюди сам.</p>
+                  <p style={{ padding: "36px 20px", margin: 0, color: C.muted, textAlign: "center" }}>Поки що нікого. Додайте тих, хто подає переведення.</p>
                 ) : (
                   <div style={{ overflowX: "auto" }}>
                     <table>
-                      <thead><tr><th>Ім'я</th><th style={{ width: 130 }}>Роль</th><th style={{ width: 120 }}>Переведень</th><th style={{ width: 44 }} /></tr></thead>
+                      <thead><tr><th>Ім'я</th><th style={{ width: 120 }}>Переведень</th><th style={{ width: 44 }} /></tr></thead>
                       <tbody>
-                        {partners.map((p) => {
-                          const adm = admins.some((a) => a.toLowerCase() === p.toLowerCase());
-                          return (
-                            <tr key={p}>
-                              <td><TextCell value={p} aria="Ім'я People Partner" onCommit={(v) => renamePartner(p, v)} /></td>
-                              <td>
-                                <button onClick={() => toggleAdmin(p)} disabled={!isAdmin}
-                                  title={isAdmin ? "Перемкнути права" : "Змінювати ролі може адміністратор"}
-                                  style={{ ...chip(adm), cursor: isAdmin ? "pointer" : "default", opacity: isAdmin || adm ? 1 : 0.6, fontSize: 12 }}>
-                                  {adm ? "адміністратор" : "партнер"}
-                                </button>
-                              </td>
-                              <td className="num">{usesPartner(p) || "—"}</td>
-                              <td>{isAdmin && <button className="del" onClick={() => removePartner(p)} title="Прибрати" aria-label={"Прибрати " + p}>✕</button>}</td>
-                            </tr>
-                          );
-                        })}
+                        {partners.map((p) => (
+                          <tr key={p}>
+                            <td><TextCell value={p} aria="Ім'я People Partner" onCommit={(v) => renamePartner(p, v)} /></td>
+                            <td className="num">{usesPartner(p) || "—"}</td>
+                            <td>{isAdmin && <button className="del" onClick={() => removePartner(p)} title="Прибрати" aria-label={"Прибрати " + p}>✕</button>}</td>
+                          </tr>
+                        ))}
                       </tbody>
                     </table>
                   </div>
@@ -2542,5 +2518,256 @@ export default function TransferDesk() {
           background: C.ink, color: "#fff", padding: "12px 18px", borderRadius: 4, boxShadow: "0 8px 24px rgba(20,30,56,.24)", maxWidth: "90vw", zIndex: 30 }}>{toast}</div>
       )}
     </div>
+  );
+}
+
+/* ─── КОРИСТУВАЧІ (лише адміністратор) ──────────────────────────────────
+Облікові записи живуть окремо від спільного стану: паролі зберігаються
+на сервері у вигляді хешу й ніколи не потрапляють у /api/state. Ім'я тут
+має точно збігатися з «Відповідальний за %» у команді — за ним сервер
+вирішує, яку команду людина бачить. ───────────────────────────────────── */
+function UsersBook({ token, me }) {
+  const [users, setUsers] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [secret, setSecret] = useState(null);
+  const [form, setForm] = useState({ username: "", displayName: "", password: "", isAdmin: false });
+
+  const card = { background: C.surface, border: "1px solid " + C.line, borderRadius: 4 };
+  const label = { fontSize: 12, fontWeight: 600, color: C.muted, marginBottom: 6, display: "block" };
+  const addBtn = { cursor: "pointer", background: C.ink, color: "#fff", border: "none", borderRadius: 3, padding: "9px 16px", whiteSpace: "nowrap" };
+
+  async function call(method, body, query) {
+    const res = await fetch("/api/admin/users" + (query || ""), {
+      method,
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: body ? JSON.stringify(body) : undefined,
+      cache: "no-store",
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "HTTP " + res.status);
+    return data;
+  }
+  async function load() {
+    setBusy(true);
+    setError("");
+    try {
+      setUsers((await call("GET")).users || []);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function create() {
+    setError("");
+    setSecret(null);
+    try {
+      const d = await call("POST", form);
+      setSecret({ username: d.user.username, displayName: d.user.displayName, password: d.password });
+      setForm({ username: "", displayName: "", password: "", isAdmin: false });
+      load();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+  async function patch(username, body, confirmText) {
+    if (confirmText && !window.confirm(confirmText)) return;
+    setError("");
+    setSecret(null);
+    try {
+      const d = await call("PATCH", { username, ...body });
+      if (d.password) setSecret({ username: d.user.username, displayName: d.user.displayName, password: d.password });
+      load();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+  async function remove(u) {
+    if (!window.confirm("Видалити обліковий запис «" + u.displayName + "» (" + u.username + ")? Увійти під ним більше не вийде.")) return;
+    setError("");
+    setSecret(null);
+    try {
+      await call("DELETE", null, "?username=" + encodeURIComponent(u.username));
+      load();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  return (
+    <section style={{ ...card, overflow: "hidden" }}>
+      <div style={{ padding: "16px 18px", borderBottom: "1px solid " + C.lineSoft }}>
+        <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 20, fontWeight: 600 }}>Користувачі й ролі</h2>
+        <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>
+          <b>Адміністратор</b> бачить і править усе. <b>Відповідальний</b> бачить лише команду, де його ім'я стоїть у полі «Відповідальний за %»
+          (Довідник → Налаштування), вносить відсотки й подає період. Чужі команди сервер йому не віддає.
+        </p>
+      </div>
+
+      {error && (
+        <p role="alert" style={{ margin: "14px 18px 0", background: C.stopSoft, borderRadius: 3, padding: "10px 12px", color: C.stop }}>
+          {error}
+        </p>
+      )}
+      {secret && (
+        <div
+          role="status"
+          style={{ margin: "14px 18px 0", background: C.warnSoft, border: "1px solid #E6CFA6", borderRadius: 3, padding: "12px 14px", color: C.ink }}
+        >
+          <div style={{ fontWeight: 600 }}>Пароль для {secret.displayName}</div>
+          <div className="num" style={{ marginTop: 6, fontSize: 15 }}>
+            логін: <b>{secret.username}</b> · пароль: <b style={{ userSelect: "all" }}>{secret.password}</b>
+          </div>
+          <div style={{ color: C.warn, fontSize: 12.5, marginTop: 6 }}>
+            Скопіюйте й передайте людині особисто. Після закриття цієї вкладки пароль більше ніде не побачити — лише скинути.
+          </div>
+        </div>
+      )}
+
+      <div style={{ overflowX: "auto" }}>
+        <table>
+          <thead>
+            <tr>
+              <th>Логін</th>
+              <th>Ім'я (як у «Відповідальний за %»)</th>
+              <th style={{ width: 150 }}>Роль</th>
+              <th style={{ width: 240 }} />
+            </tr>
+          </thead>
+          <tbody>
+            {busy && !users.length && (
+              <tr>
+                <td colSpan={4} style={{ color: C.muted }}>
+                  Завантажуємо…
+                </td>
+              </tr>
+            )}
+            {!busy && !users.length && (
+              <tr>
+                <td colSpan={4} style={{ color: C.muted }}>
+                  Облікових записів ще немає.
+                </td>
+              </tr>
+            )}
+            {users.map((u) => {
+              const self = me && me.username === u.username;
+              return (
+                <tr key={u.username}>
+                  <td className="num">
+                    {u.username}
+                    {self && <span style={{ color: C.muted }}> (ви)</span>}
+                  </td>
+                  <td>
+                    <TextCell value={u.displayName} aria={"Ім'я " + u.username} onCommit={(v) => patch(u.username, { displayName: v })} />
+                  </td>
+                  <td>
+                    <button
+                      disabled={self}
+                      onClick={() =>
+                        patch(
+                          u.username,
+                          { isAdmin: !u.isAdmin },
+                          u.isAdmin
+                            ? "Зняти права адміністратора з «" + u.displayName + "»?"
+                            : "Зробити «" + u.displayName + "» адміністратором? Він бачитиме й правитиме все.",
+                        )
+                      }
+                      title={self ? "Власну роль змінює інший адміністратор" : "Перемкнути роль"}
+                      style={{
+                        cursor: self ? "default" : "pointer",
+                        padding: "5px 10px",
+                        borderRadius: 3,
+                        fontSize: 12,
+                        border: "1px solid " + (u.isAdmin ? C.ink2 : C.line),
+                        background: u.isAdmin ? C.ink : C.surface,
+                        color: u.isAdmin ? "#fff" : C.ink2,
+                      }}
+                    >
+                      {u.isAdmin ? "адміністратор" : "відповідальний"}
+                    </button>
+                  </td>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    <button
+                      className="link"
+                      style={{ marginRight: 14 }}
+                      onClick={() =>
+                        patch(u.username, { resetPassword: true }, "Згенерувати новий пароль для «" + u.displayName + "»? Старий перестане діяти.")
+                      }
+                    >
+                      Скинути пароль
+                    </button>
+                    {!self && (
+                      <button className="link" style={{ color: C.stop }} onClick={() => remove(u)}>
+                        Видалити
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{ padding: "16px 18px", borderTop: "1px solid " + C.lineSoft, background: "#F7F9FC" }}>
+        <h3 style={{ margin: "0 0 10px", fontSize: 15, fontWeight: 600 }}>Додати користувача</h3>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, alignItems: "end" }}>
+          <div>
+            <label style={label} htmlFor="nu-login">
+              Логін
+            </label>
+            <input
+              id="nu-login"
+              type="text"
+              value={form.username}
+              placeholder="напр. taras.mamai"
+              onChange={(e) => setForm((f) => ({ ...f, username: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label style={label} htmlFor="nu-name">
+              Ім'я та прізвище
+            </label>
+            <input
+              id="nu-name"
+              type="text"
+              value={form.displayName}
+              placeholder="Тарас Мамай"
+              onChange={(e) => setForm((f) => ({ ...f, displayName: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label style={label} htmlFor="nu-pwd">
+              Пароль (порожньо — згенерувати)
+            </label>
+            <input
+              id="nu-pwd"
+              type="text"
+              value={form.password}
+              placeholder="щонайменше 8 символів"
+              onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label style={{ ...label, display: "flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
+              <input type="checkbox" checked={form.isAdmin} onChange={(e) => setForm((f) => ({ ...f, isAdmin: e.target.checked }))} />
+              адміністратор
+            </label>
+            <button style={{ ...addBtn, width: "100%" }} onClick={create}>
+              Створити
+            </button>
+          </div>
+        </div>
+        <p style={{ margin: "10px 0 0", color: C.muted, fontSize: 12.5 }}>
+          Логін — латиницею, 3–32 символи (літери, цифри, крапка, дефіс, підкреслення). Щоб відповідальний побачив команду, впишіть це саме ім'я в
+          «Довідник → Налаштування → Відповідальний за %».
+        </p>
+      </div>
+    </section>
   );
 }
