@@ -106,6 +106,27 @@ const shiftPeriod = (p, n) => {
   return { y, m: Math.floor(idx / 2) + 1, half: (idx % 2) + 1 };
 };
 
+/* Місяць для фін. обліку: дві половини зводяться пропорційно дням
+   (01–15 — 15 днів, 16–кінець — решта). Результат округлюється до цілих так,
+   щоб сума не змінилась. Якщо одну половину не заповнено, береться інша. */
+const monthKeyOf = (y, m) => y + "-" + pad(m);
+const finLabel = (fm) => MONTHS[fm.m - 1] + " " + fm.y;
+const stepMonth = (fm, n) => { const i = fm.y * 12 + fm.m - 1 + n; return { y: Math.floor(i / 12), m: (i % 12) + 1 }; };
+const num2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+const allocSig = (a) => asAlloc(a).filter((r) => r.percent > 0).map((r) => r.project + ":" + num2(r.percent)).sort().join("|");
+function mergeHalves(a1, a2, days) {
+  const x1 = asAlloc(a1).filter((r) => r.percent > 0), x2 = asAlloc(a2).filter((r) => r.percent > 0);
+  if (!x1.length && !x2.length) return [];
+  const w1 = x1.length && x2.length ? 15 / days : x1.length ? 1 : 0;
+  const raw = new Map();
+  x1.forEach((r) => raw.set(r.project, (raw.get(r.project) || 0) + r.percent * w1));
+  x2.forEach((r) => raw.set(r.project, (raw.get(r.project) || 0) + r.percent * (1 - w1)));
+  const rows = [...raw].map(([project, v]) => ({ project, percent: Math.floor(v + 1e-9), rest: v - Math.floor(v + 1e-9) }));
+  let left = Math.round([...raw.values()].reduce((s, v) => s + v, 0)) - rows.reduce((s, r) => s + r.percent, 0);
+  rows.slice().sort((a, b) => b.rest - a.rest).forEach((r) => { if (left > 0) { r.percent++; left--; } });
+  return rows.filter((r) => r.percent > 0).map(({ project, percent }) => ({ project, percent }));
+}
+
 const SEED_TEAMS = ["Внутрішня автоматизація", "Маркетинг", "Адмін блок", "People Partner", "Рекрутинг", "Партнершіп"]
   .map((name, i) => ({ id: "tm" + i, name, owner: "", alloc: [], updatedAt: "", updatedBy: "" }));
 
@@ -325,6 +346,9 @@ export default function TransferDesk() {
   const [entries, setEntries] = useState([]);
   const [period, setPeriod] = useState(periodOf(todayISO()));
   const [showHistory, setShowHistory] = useState(null);
+  const [fin, setFin] = useState([]);
+  const [finMonth, setFinMonth] = useState(() => { const d = todayISO(); return { y: +d.slice(0, 4), m: +d.slice(5, 7) }; });
+  const [finTeam, setFinTeam] = useState("all");
   const [settings, setSettings] = useState({ approvalMode: "give" });
   const [deleted, setDeleted] = useState({});
   const [approveNote, setApproveNote] = useState({});
@@ -390,7 +414,7 @@ export default function TransferDesk() {
   const fileRef = useRef(null);
 
   /* ── синхронізація з сервером ── */
-  const snap = () => ({ employees, projects, partners, reasons, transfers, admins, log, deleted, pms, codes, teams, entries, settings });
+  const snap = () => ({ employees, projects, partners, reasons, transfers, admins, log, deleted, pms, codes, teams, entries, fin, settings });
   stateRef.current = snap();
 
   function applyState(d) {
@@ -406,6 +430,7 @@ export default function TransferDesk() {
     setCodes(d.codes || {});
     setTeams((d.teams || []).length || d._view === "hrd" ? (d.teams || []) : SEED_TEAMS);
     setEntries(d.entries || []);
+    setFin(d.fin || []);
     setSettings({ approvalMode: "give", ...(d.settings || {}) });
   }
 
@@ -482,7 +507,7 @@ export default function TransferDesk() {
     if (cur === lastSync.current) return;
     const id = setTimeout(() => syncNow(false), 700);
     return () => clearTimeout(id);
-  }, [employees, projects, partners, reasons, transfers, admins, log, deleted, pms, codes, teams, entries, settings, ready, user]);
+  }, [employees, projects, partners, reasons, transfers, admins, log, deleted, pms, codes, teams, entries, fin, settings, ready, user]);
 
   useEffect(() => {
     if (!ready || !deskUser(user)) return;
@@ -964,6 +989,150 @@ export default function TransferDesk() {
       rows: [["Проєкт", "Код"], ...allProjects.map((p) => [p, codes[p] || ""])] },
   ]);
 
+  /* ─── місяць для фін. обліку ────────────────────────────────────────── */
+  const finKey = monthKeyOf(finMonth.y, finMonth.m);
+  const finDays = lastDay(finMonth.y, finMonth.m);
+  const finK1 = periodKey(finMonth.y, finMonth.m, 1), finK2 = periodKey(finMonth.y, finMonth.m, 2);
+  const finClose = fin.find((x) => x.id === "fc_" + finKey);
+  const finClosed = !!(finClose && finClose.closed);
+  const teamNameOf = (id) => (teams.find((t) => t.id === id) || {}).name || "";
+  const byTeamName = (a, b) => (a.team || "яяя").localeCompare(b.team || "яяя", "uk") || a.name.localeCompare(b.name, "uk");
+
+  const finData = useMemo(() => {
+    const filled = (id, k) => allocIn(id, k).some((r) => r.percent > 0);
+    const people = employees.filter((e) => (e.teamId && teams.some((t) => t.id === e.teamId)) || filled(e.id, finK1) || filled(e.id, finK2));
+    const rows = people.map((e) => {
+      const a1 = asAlloc(allocIn(e.id, finK1)).filter((r) => r.percent > 0), a2 = asAlloc(allocIn(e.id, finK2)).filter((r) => r.percent > 0);
+      const calc = mergeHalves(a1, a2, finDays);
+      const ov = fin.find((x) => x.id === "fo_" + finKey + "_" + e.id);
+      const manual = !!(ov && ov.alloc);
+      const alloc = manual ? asAlloc(ov.alloc).filter((r) => r.percent > 0) : calc;
+      return {
+        id: e.id, name: e.name, position: e.position || "", teamId: e.teamId || "", team: teamNameOf(e.teamId),
+        t1: tagOf(a1, codes), t2: tagOf(a2, codes), calc, calcTag: tagOf(calc, codes),
+        alloc, tag: tagOf(alloc, codes), total: num2(alloc.reduce((s, r) => s + r.percent, 0)),
+        manual, note: (ov && ov.note) || "", by: manual ? ov.updatedBy || "" : "", at: manual ? ov.updatedAt || "" : "",
+        miss: !a1.length && !a2.length ? "немає даних" : !a1.length ? "бракує 01–15" : !a2.length ? "бракує 16–" + finDays : "",
+      };
+    }).sort(byTeamName);
+    const pending = teams.filter((t) => employees.some((e) => e.teamId === t.id))
+      .map((t) => ({ name: t.name, h1: !!(t.submitted || {})[finK1], h2: !!(t.submitted || {})[finK2] }));
+    return { rows, pending };
+  }, [employees, entries, teams, fin, codes, finKey]);
+
+  // Закритий місяць показуємо зі збереженого знімка: цифри й теги не рухаються.
+  const finRows = useMemo(() => {
+    if (!finClosed) return finData.rows;
+    const live = new Map(finData.rows.map((r) => [r.id, r]));
+    return (finClose.rows || []).map((s) => {
+      const l = live.get(s.e), e = employees.find((x) => x.id === s.e);
+      const alloc = (s.a || []).map(([project, percent]) => ({ project, percent: Number(percent) || 0 }));
+      const teamId = (e && e.teamId) || "";
+      return {
+        t1: "", t2: "", calc: [], calcTag: "", miss: "", ...(l || {}),
+        id: s.e, name: (e && e.name) || s.name || s.e, position: (e && e.position) || "", teamId, team: teamNameOf(teamId),
+        alloc, tag: s.t || tagOf(alloc, codes), total: num2(alloc.reduce((x, r) => x + r.percent, 0)),
+        manual: !!s.m, by: s.b || "", at: "", note: s.n || "",
+        drift: !!l && allocSig(s.m ? alloc : l.calc) !== allocSig(alloc),
+      };
+    }).sort(byTeamName);
+  }, [finClosed, finClose, finData, employees, teams, codes]);
+  const finShown = finRows.filter((r) => finTeam === "all" || r.teamId === finTeam);
+  const finCols = (() => {
+    const used = new Set();
+    finShown.forEach((r) => [...r.alloc, ...(r.calc || [])].forEach((a) => a.percent > 0 && used.add(a.project)));
+    return uniq([...orderedProjects.filter((p) => used.has(p)), ...used]);
+  })();
+  const finBad = finData.rows.filter((r) => r.alloc.length && Math.abs(r.total - 100) > 0.01);
+  const finOpen = finData.pending.filter((t) => !t.h1 || !t.h2);
+  const finDrift = finRows.filter((r) => r.drift).length;
+
+  function setFinRecord(empId, patch) {
+    if (!isAdmin) return denied("коригувати місяць для фін. обліку може лише адміністратор");
+    if (finClosed) return setToast("Місяць закрито — спершу відкрийте його.");
+    const id = "fo_" + finKey + "_" + empId;
+    setFin((p) => {
+      const old = p.find((x) => x.id === id) || { id, kind: "override", monthKey: finKey, employeeId: empId, alloc: null, note: "" };
+      const next = { ...old, ...patch, updatedAt: nowISO(), updatedBy: user.name };
+      return p.some((x) => x.id === id) ? p.map((x) => (x.id === id ? next : x)) : [...p, next];
+    });
+  }
+  function setFinCell(row, project, value) {
+    const n = value === "" ? 0 : Number(value);
+    if (!Number.isFinite(n)) return;
+    const v = Math.max(0, Math.min(100, n));
+    const rows = row.alloc.map((r) => (r.project === project ? { ...r, percent: v } : r)).filter((r) => r.percent > 0);
+    if (v > 0 && !rows.some((r) => r.project === project)) rows.push({ project, percent: v });
+    // Повернули цифри до розрахунку — коригування знімається само.
+    setFinRecord(row.id, { alloc: allocSig(rows) === allocSig(row.calc) ? null : rows });
+  }
+  function resetFin(row) {
+    setFinRecord(row.id, { alloc: null });
+    pushLog("скинув коригування місяця", row.name + " · " + finLabel(finMonth));
+  }
+  function closeMonth() {
+    if (!isAdmin) return denied("закрити місяць може лише адміністратор");
+    if (finBad.length) {
+      return setToast("Не закриємо: сума не 100% у " + finBad.length + " " + plural(finBad.length, "людини", "людей", "людей") + " (" +
+        finBad.slice(0, 3).map((r) => r.name).join(", ") + (finBad.length > 3 ? "…" : "") + ").");
+    }
+    const rows = finData.rows.filter((r) => r.alloc.length);
+    if (!rows.length) return setToast("За " + finLabel(finMonth) + " ще немає жодних даних.");
+    const empty = finData.rows.length - rows.length;
+    const msg = "Закрити " + finLabel(finMonth) + " для фін. обліку? Цифри й теги зафіксуються для " + rows.length + " " + plural(rows.length, "людини", "людей", "людей") + "." +
+      (finOpen.length ? "\n\nНе всі періоди подано: " + finOpen.map((t) => t.name).join(", ") + "." : "") +
+      (empty ? "\n\nБез даних " + empty + " — у звіт не потраплять." : "");
+    if (!window.confirm(msg)) return;
+    const stamp = nowISO();
+    const snapRows = rows.map((r) => ({
+      e: r.id, name: r.name, a: r.alloc.map((x) => [x.project, x.percent]), t: r.tag,
+      ...(r.manual ? { m: 1, b: r.by } : {}), ...(r.note ? { n: r.note } : {}),
+    }));
+    const rec = { id: "fc_" + finKey, kind: "close", monthKey: finKey, closed: true, by: user.name, at: stamp, rows: snapRows, updatedAt: stamp, updatedBy: user.name };
+    setFin((p) => [...p.filter((x) => x.id !== rec.id), rec]);
+    pushLog("закрив місяць для фін. обліку", finLabel(finMonth) + ", " + rows.length + " " + plural(rows.length, "людина", "людини", "людей"));
+    setToast("Місяць закрито: " + finLabel(finMonth));
+  }
+  function reopenMonth() {
+    if (!isAdmin) return denied("відкрити місяць може лише адміністратор");
+    if (!window.confirm("Відкрити " + finLabel(finMonth) + " знову? Цифри знову рахуватимуться з табеля (ручні коригування збережуться).")) return;
+    const stamp = nowISO();
+    setFin((p) => p.map((x) => (x.id === "fc_" + finKey ? { ...x, closed: false, rows: [], reopenedBy: user.name, reopenedAt: stamp, updatedAt: stamp, updatedBy: user.name } : x)));
+    pushLog("відкрив місяць для фін. обліку", finLabel(finMonth));
+  }
+  function exportFin() {
+    const rows = finRows;
+    const byProj = {};
+    rows.forEach((r) => r.alloc.forEach((a) => {
+      const p = (byProj[a.project] = byProj[a.project] || { fte: 0, people: 0 });
+      p.fte += a.percent / 100; p.people++;
+    }));
+    const byCode = {};
+    Object.entries(byProj).forEach(([p, v]) => { const k = codes[p] || "без коду"; byCode[k] = (byCode[k] || 0) + v.fte; });
+    const h2 = "16–" + finDays;
+    downloadXlsx("fin-oblik-" + finKey + ".xlsx", [
+      { name: "Місяць " + finKey, freeze: 1, cols: [26, 24, 24, 30, 30, 44, 34, 34, 10, 14, 30, 20],
+        rows: [["Співробітник", "Посада", "Команда", "01–15", h2, "Розподіл за місяць", "Тег за місяць", "Тег за розрахунком", "Разом, %", "Джерело", "Примітка", "Скоригував"],
+          ...rows.map((r) => [r.name, r.position, r.team, r.t1, r.t2, r.alloc.length ? allocText(r.alloc) : "", r.tag, r.calcTag,
+            r.total, r.manual ? "коригування" : r.miss || "розрахунок", r.note, r.manual ? r.by : ""])] },
+      { name: "По проєктах", freeze: 1, cols: [30, 14, 12, 10],
+        rows: [["Проєкт", "Код", "Ставок", "Людей"],
+          ...Object.keys(byProj).sort((a, b) => a.localeCompare(b, "uk")).map((p) => [p, codes[p] || "", num2(byProj[p].fte), byProj[p].people])] },
+      { name: "По кодах", freeze: 1, cols: [16, 12],
+        rows: [["Код", "Ставок"], ...Object.entries(byCode).sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, num2(v)])] },
+      { name: "Коригування", freeze: 1, cols: [26, 24, 34, 34, 34, 20],
+        rows: [["Співробітник", "Команда", "За розрахунком", "Після коригування", "Примітка", "Скоригував"],
+          ...rows.filter((r) => r.manual).map((r) => [r.name, r.team, r.calcTag, r.tag, r.note, r.by])] },
+      { name: "Статус", cols: [30, 18, 18],
+        rows: [["Місяць", finLabel(finMonth)],
+          ["Стан", finClosed ? "закрито · " + finClose.by + ", " + fmtDT(finClose.at) : "не закрито (чернетка)"],
+          ["Як рахується", "01–15 × 15/" + finDays + " + " + h2 + " × " + (finDays - 15) + "/" + finDays + ", округлено до цілих"],
+          [],
+          ["Команда", "01–15 подано", h2 + " подано"],
+          ...finData.pending.map((t) => [t.name, t.h1 ? "так" : "ні", t.h2 ? "так" : "ні"])] },
+    ]);
+  }
+
   function exportReport() {
     const num = (n) => Number(n.toFixed(2));
     const months = [["Місяць", "Переведень", "З розподілом на кілька проєктів", "People Partners"],
@@ -1313,8 +1482,8 @@ export default function TransferDesk() {
           <nav style={{ display: "flex", gap: 4, marginTop: 14, flexWrap: "wrap" }}>
             {[["form", "Нове переведення"], ["journal", "Журнал"],
               ["approve", "Погодження" + (myPending.length ? " · " + myPending.length : "")],
-              ["snap", "Зріз на дату"], ["teams", "Команди і теги"], ["report", "Звіт по місяцях"], ["lists", "Довідник"]]
-              .filter(([k]) => isAdmin || !["approve", "lists"].includes(k)).map(([k, l]) => (
+              ["snap", "Зріз на дату"], ["teams", "Команди і теги"], ["fin", "Місяць · фін. облік"], ["report", "Звіт по місяцях"], ["lists", "Довідник"]]
+              .filter(([k]) => isAdmin || !["approve", "lists", "fin"].includes(k)).map(([k, l]) => (
               <button key={k} onClick={() => setTab(k)} aria-current={tab === k}
                 style={{ cursor: "pointer", background: "none", border: "none", padding: "10px 14px",
                   color: tab === k ? C.ink : C.muted, fontWeight: tab === k ? 600 : 400,
@@ -1901,6 +2070,153 @@ export default function TransferDesk() {
                 </section>
               );
             })}
+          </div>
+        )}
+
+        {/* ── МІСЯЦЬ ДЛЯ ФІН. ОБЛІКУ ── */}
+        {tab === "fin" && isAdmin && (
+          <div style={{ display: "grid", gap: 20 }}>
+            <section style={{ ...card, padding: "16px 20px" }}>
+              <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 21, fontWeight: 600 }}>Місяць для фін. обліку</h2>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", marginLeft: 8 }}>
+                  <button className="ghost" onClick={() => setFinMonth((m) => stepMonth(m, -1))} aria-label="Попередній місяць">←</button>
+                  <span className="num" style={{ fontWeight: 600, minWidth: 150, textAlign: "center" }}>{finLabel(finMonth)}</span>
+                  <button className="ghost" onClick={() => setFinMonth((m) => stepMonth(m, 1))} aria-label="Наступний місяць">→</button>
+                </div>
+                {finClosed && (
+                  <span style={{ background: C.signalSoft, color: C.signal, borderRadius: 3, padding: "2px 8px", fontSize: 12, fontWeight: 600 }}>
+                    закрито · {finClose.by}, {fmtDT(finClose.at)}
+                  </span>
+                )}
+                <select value={finTeam} onChange={(e) => setFinTeam(e.target.value)} aria-label="Команда" style={{ width: "auto", marginLeft: "auto" }}>
+                  <option value="all">Усі команди</option>
+                  {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+                <button onClick={exportFin} style={{ cursor: "pointer", padding: "8px 14px", borderRadius: 3, border: "1px solid " + C.line, background: C.surface, color: C.ink2 }}>
+                  Звіт в Excel
+                </button>
+              </div>
+              <p style={{ margin: "10px 0 0", color: C.muted, fontSize: 12.5 }}>
+                Дві половини зводяться пропорційно дням: 01–15 × 15/{finDays} + 16–{finDays} × {finDays - 15}/{finDays}, округлено до цілих.
+                Якщо одну половину не заповнено, береться інша. Клітинку можна змінити вручну — вона підсвітиться, розрахунок видно в підказці.
+              </p>
+              {!finClosed && finOpen.length > 0 && (
+                <p style={{ margin: "12px 0 0", background: C.warnSoft, border: "1px solid #E6CFA6", borderRadius: 3, padding: "10px 12px", color: C.warn }}>
+                  Не всі періоди подано: {finOpen.map((t) => t.name + " (" + [!t.h1 && "01–15", !t.h2 && "16–" + finDays].filter(Boolean).join(", ") + ")").join("; ")}.
+                </p>
+              )}
+              {finClosed && finDrift > 0 && (
+                <p style={{ margin: "12px 0 0", background: C.warnSoft, border: "1px solid #E6CFA6", borderRadius: 3, padding: "10px 12px", color: C.warn }}>
+                  Після закриття табель змінився в {finDrift} {plural(finDrift, "людини", "людей", "людей")}. У звіті лишаються зафіксовані цифри;
+                  щоб перерахувати, відкрийте місяць знову.
+                </p>
+              )}
+            </section>
+
+            <section style={{ ...card, overflow: "hidden" }}>
+              {finShown.length === 0 ? (
+                <p style={{ padding: "18px 20px", margin: 0, color: C.muted }}>
+                  {finClosed ? "У закритому місяці немає людей цієї команди." : "За " + finLabel(finMonth) + " даних ще немає — спершу заповніть табель на вкладці «Команди і теги»."}
+                </p>
+              ) : (
+                <div style={{ overflowX: "auto" }}>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th style={{ minWidth: 200, position: "sticky", left: 0, background: C.surface }}>ПІБ</th>
+                        <th style={{ minWidth: 140 }}>01–15</th>
+                        <th style={{ minWidth: 140 }}>16–{finDays}</th>
+                        {finCols.map((c) => (
+                          <th key={c} style={{ minWidth: 84, textAlign: "center" }}>
+                            <div>{c}</div>
+                            <div className="num" style={{ fontWeight: 400, color: codes[c] ? C.muted : C.stop }}>{codes[c] || "без коду"}</div>
+                          </th>
+                        ))}
+                        <th style={{ minWidth: 70, textAlign: "center" }}>Разом</th>
+                        <th style={{ minWidth: 190 }}>Тег за місяць</th>
+                        <th style={{ minWidth: 180 }}>Примітка</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {finShown.map((r) => {
+                        const val = (list, c) => { const x = (list || []).find((y) => y.project === c); return x ? x.percent : ""; };
+                        return (
+                          <tr key={r.id}>
+                            <td style={{ position: "sticky", left: 0, background: C.surface }}>
+                              <button className="link" style={{ color: C.ink, textDecoration: "none", fontWeight: 600 }} onClick={() => setCardId(r.id)}>{r.name}</button>
+                              <div style={{ color: C.muted, fontSize: 11.5 }}>{r.team || "без команди"}</div>
+                              {r.miss && <div style={{ color: C.warn, fontSize: 11.5 }}>{r.miss}</div>}
+                              {r.drift && <div style={{ color: C.warn, fontSize: 11.5 }}>табель змінено після закриття</div>}
+                            </td>
+                            <td className="num" style={{ fontSize: 12, color: r.t1 ? C.ink2 : C.muted, wordBreak: "break-all" }}>{r.t1 || "—"}</td>
+                            <td className="num" style={{ fontSize: 12, color: r.t2 ? C.ink2 : C.muted, wordBreak: "break-all" }}>{r.t2 || "—"}</td>
+                            {finCols.map((c) => {
+                              const v = val(r.alloc, c), cv = val(r.calc, c), changed = r.manual && String(v) !== String(cv);
+                              return (
+                                <td key={c} style={{ padding: 4 }}>
+                                  <input type="number" className="num" min="0" max="100" value={v} disabled={finClosed}
+                                    title={changed ? "за розрахунком: " + (cv === "" ? 0 : cv) : undefined}
+                                    onChange={(ev) => setFinCell(r, c, ev.target.value)} aria-label={r.name + ", " + c + ", за місяць"}
+                                    style={{ textAlign: "center", padding: "7px 4px",
+                                      background: changed ? C.warnSoft : finClosed ? "#F4F6FA" : C.surface,
+                                      border: "1px solid " + (changed ? "#E6CFA6" : v !== "" ? C.line : C.lineSoft) }} />
+                                </td>
+                              );
+                            })}
+                            <td className="num" style={{ textAlign: "center", fontWeight: 600, color: r.total === 100 ? C.signal : r.total === 0 ? C.muted : C.stop }}>
+                              {r.total ? r.total + "%" : "—"}
+                            </td>
+                            <td className="num" style={{ fontWeight: 600, color: r.tag ? C.ink : C.muted, wordBreak: "break-all", fontSize: 12.5 }}>
+                              {r.tag || "—"}
+                              {r.manual && (
+                                <div style={{ fontWeight: 400, fontSize: 11.5, color: C.warn, wordBreak: "normal" }}>
+                                  скориговано{r.by ? " · " + r.by : ""}
+                                  {!finClosed && <> · <button className="link" style={{ fontSize: 11.5 }} onClick={() => resetFin(r)}>скинути</button></>}
+                                </div>
+                              )}
+                            </td>
+                            <td style={{ padding: 4 }}>
+                              <input type="text" value={r.note} disabled={finClosed} placeholder={r.manual ? "чому змінено" : ""}
+                                onChange={(ev) => setFinRecord(r.id, { note: ev.target.value })} aria-label={"Примітка, " + r.name} />
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      <tr>
+                        <td style={{ position: "sticky", left: 0, background: "#F4F7FC", color: C.muted, fontWeight: 600 }}>Разом, ставок</td>
+                        <td colSpan={2} style={{ background: "#F4F7FC" }} />
+                        {finCols.map((c) => (
+                          <td key={c} className="num" style={{ textAlign: "center", background: "#F4F7FC", color: C.ink2 }}>
+                            {num2(finShown.reduce((s, r) => s + (Number((r.alloc.find((x) => x.project === c) || {}).percent) || 0) / 100, 0)) || "—"}
+                          </td>
+                        ))}
+                        <td colSpan={3} style={{ background: "#F4F7FC" }} />
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <div style={{ display: "flex", gap: 10, padding: "14px 20px", borderTop: "1px solid " + C.lineSoft, flexWrap: "wrap", alignItems: "center" }}>
+                {!finClosed ? (
+                  <>
+                    <span className="num" style={{ color: C.muted, fontSize: 12.5 }}>
+                      людей: {finData.rows.filter((r) => r.alloc.length).length}
+                      {" · "}скориговано: {finData.rows.filter((r) => r.manual).length}
+                      {finBad.length > 0 && <span style={{ color: C.stop }}> · сума не 100%: {finBad.length}</span>}
+                    </span>
+                    <button style={{ ...addBtn, marginLeft: "auto" }} onClick={closeMonth}>Закрити місяць</button>
+                  </>
+                ) : (
+                  <>
+                    <span style={{ color: C.muted, fontSize: 12.5 }}>
+                      Цифри зафіксовані для фін. обліку й не змінюються, навіть якщо хтось поправить табель.
+                    </span>
+                    <button className="link" style={{ marginLeft: "auto" }} onClick={reopenMonth}>Відкрити знову</button>
+                  </>
+                )}
+              </div>
+            </section>
           </div>
         )}
 
