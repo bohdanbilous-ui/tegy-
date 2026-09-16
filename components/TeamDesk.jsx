@@ -66,6 +66,8 @@ export default function TeamDesk({ user, token, onSignOut }) {
   const [entries, setEntries] = useState([]);
   const [period, setPeriod] = useState(periodOf(today));
   const [teamId, setTeamId] = useState("");
+  // dirty: id рядка → номер правки. Рядок вважається збереженим лише тоді,
+  // коли сервер підтвердив саме ту правку, яку ми відправили.
   const [dirty, setDirty] = useState({});
   const [saving, setSaving] = useState("ok");
   const [toast, setToast] = useState(null);
@@ -74,12 +76,18 @@ export default function TeamDesk({ user, token, onSignOut }) {
   dirtyRef.current = dirty;
   const entriesRef = useRef([]);
   entriesRef.current = entries;
+  const dataRef = useRef(null);
+  dataRef.current = data;
+  const editSeq = useRef(0);
+  const busy = useRef(false);   // одночасно йде лише один запис на сервер
+  const loadGen = useRef(0);    // відповідь застарілого читання не застосовується
 
   const pKey = periodKey(period);
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
   function apply(d) {
     setData(d);
-    // Не затираємо рядки, які людина саме редагує.
+    // Рядки, які людина ще редагує, лишаються її версією.
     setEntries((cur) => {
       const keep = cur.filter((x) => dirtyRef.current[x.id]);
       return [...(d.entries || []).filter((x) => !dirtyRef.current[x.id]), ...keep];
@@ -93,8 +101,54 @@ export default function TeamDesk({ user, token, onSignOut }) {
     if (e.data && e.data.teams) apply(e.data);
   }
   async function load() {
-    try { apply(await call("GET", token)); setSaving("ok"); } catch (e) { fail(e); }
+    if (busy.current) return;
+    const gen = ++loadGen.current;
+    try {
+      const d = await call("GET", token);
+      if (gen === loadGen.current && !busy.current) { apply(d); setSaving(Object.keys(dirtyRef.current).length ? "saving" : "ok"); }
+    } catch (e) { fail(e); }
   }
+  async function lock() {
+    while (busy.current) await wait(120);
+    busy.current = true;
+    loadGen.current++;
+  }
+  const unlock = () => { busy.current = false; };
+  function clean(sent) {
+    const rem = { ...dirtyRef.current };
+    Object.keys(sent).forEach((id) => { if (rem[id] === sent[id]) delete rem[id]; });
+    dirtyRef.current = rem;
+    setDirty(rem);
+  }
+  const put = (tid, key, rows, submit) => call("PUT", token, { teamId: tid, periodKey: key, rows, submit: !!submit });
+
+  // Зберігає всі незбережені рядки. Значення й номери правок беруться
+  // в один момент — уже після того, як попередній запис завершився.
+  async function flush() {
+    await lock();
+    let failed = false;
+    try {
+      const groups = {};
+      entriesRef.current.forEach((x) => {
+        const ver = dirtyRef.current[x.id];
+        if (!ver) return;
+        const m = (dataRef.current?.members || []).find((y) => y.id === x.employeeId);
+        if (!m) return;
+        const k = m.teamId + "|" + x.periodKey;
+        const g = groups[k] || (groups[k] = { tid: m.teamId, key: x.periodKey, rows: [], sent: {} });
+        g.rows.push({ employeeId: x.employeeId, alloc: x.alloc.map((r) => ({ ...r })) });
+        g.sent[x.id] = ver;
+      });
+      for (const g of Object.values(groups)) {
+        setSaving("saving");
+        try { const d = await put(g.tid, g.key, g.rows, false); clean(g.sent); apply(d); }
+        catch (e) { clean(g.sent); fail(e); failed = true; }
+      }
+      if (!failed) setSaving(Object.keys(dirtyRef.current).length ? "saving" : "ok");
+    } finally { unlock(); }
+    if (failed) load();
+  }
+
   useEffect(() => { load(); }, []);
   useEffect(() => {
     const id = setInterval(() => { if (!document.hidden && !Object.keys(dirtyRef.current).length) load(); }, 60000);
@@ -102,13 +156,22 @@ export default function TeamDesk({ user, token, onSignOut }) {
   }, []);
   useEffect(() => { if (!toast) return; const id = setTimeout(() => setToast(null), 5000); return () => clearTimeout(id); }, [toast]);
 
+  // Автозбереження: через секунду після останньої правки.
+  useEffect(() => {
+    if (!Object.keys(dirty).length) return;
+    setSaving("saving");
+    const t = setTimeout(flush, 900);
+    return () => clearTimeout(t);
+  }, [dirty]);
+
   const team = (data?.teams || []).find((t) => t.id === teamId);
   const members = (data?.members || []).filter((m) => m.teamId === teamId);
   const codes = data?.codes || {};
   const sub = team ? (team.submitted || {})[pKey] : null;
   const locked = !!sub;
 
-  const allocIn = (empId, key) => ((entries.find((x) => x.id === entryId(key, empId)) || {}).alloc) || [];
+  const allocOf = (list, empId, key) => ((list.find((x) => x.id === entryId(key, empId)) || {}).alloc) || [];
+  const allocIn = (empId, key) => allocOf(entries, empId, key);
   const cellValue = (empId, project) => { const r = allocIn(empId, pKey).find((x) => x.project === project); return r ? r.percent : ""; };
   const rowTotal = (empId) => sum(allocIn(empId, pKey));
   const filled = members.filter((m) => rowTotal(m.id) > 0).length;
@@ -121,79 +184,58 @@ export default function TeamDesk({ user, token, onSignOut }) {
     return all.filter((p) => used.has(p));
   }, [data, compact, members, entries]);
 
-  async function save(rows, submit, key = pKey, tid = teamId) {
-    if (!tid) return null;
-    setSaving("saving");
-    try {
-      const d = await call("PUT", token, { teamId: tid, periodKey: key, rows, submit: !!submit });
-      const remaining = { ...dirtyRef.current };
-      rows.forEach((r) => delete remaining[entryId(key, r.employeeId)]);
-      dirtyRef.current = remaining;
-      setDirty(remaining);
-      apply(d);
-      setSaving("ok");
-      return d;
-    } catch (e) {
-      // Сервер відхилив рядки (період подано, людину прибрали з команди тощо):
-      // не пробуємо ще раз, а показуємо актуальний стан.
-      const remaining = { ...dirtyRef.current };
-      rows.forEach((r) => delete remaining[entryId(key, r.employeeId)]);
-      dirtyRef.current = remaining;
-      setDirty(remaining);
-      fail(e);
-      if (e.status !== 401 && !(e.data && e.data.teams)) load();
-      return null;
-    }
-  }
-
-  // Автозбереження: через секунду після останньої правки.
-  useEffect(() => {
-    if (!Object.keys(dirty).length) return;
-    const t = setTimeout(() => {
-      // Групуємо за командою й періодом: людина могла перегорнути період до збереження.
-      const groups = {};
-      entriesRef.current.filter((x) => dirtyRef.current[x.id]).forEach((x) => {
-        const m = (data?.members || []).find((y) => y.id === x.employeeId);
-        if (!m) return;
-        const k = m.teamId + "|" + x.periodKey;
-        (groups[k] = groups[k] || []).push({ employeeId: x.employeeId, alloc: x.alloc });
-      });
-      Object.entries(groups).forEach(([k, rows]) => { const [tid, key] = k.split("|"); save(rows, false, key, tid); });
-    }, 900);
-    return () => clearTimeout(t);
-  }, [dirty]);
-
   function setCell(empId, project, value) {
     if (locked) return;
-    const v = value === "" ? 0 : Math.max(0, Math.min(100, Number(value)));
+    const n = value === "" ? 0 : Number(value);
+    if (!Number.isFinite(n)) return;
+    const v = Math.max(0, Math.min(100, n));
     const id = entryId(pKey, empId);
+    const ver = ++editSeq.current;
     setEntries((p) => {
       const old = p.find((x) => x.id === id);
-      const rows = (old ? old.alloc : []).filter((r) => r.project !== project);
-      if (v > 0) rows.push({ project, percent: v });
-      const next = { id, periodKey: pKey, employeeId: empId, alloc: rows };
+      // Порядок проєктів у рядку не змінюється — змінюється лише відсоток.
+      const rows = (old ? old.alloc : []).map((r) => (r.project === project ? { ...r, percent: v } : r)).filter((r) => r.percent > 0);
+      if (v > 0 && !rows.some((r) => r.project === project)) rows.push({ project, percent: v });
+      const next = { ...(old || {}), id, periodKey: pKey, employeeId: empId, alloc: rows };
       return old ? p.map((x) => (x.id === id ? next : x)) : [...p, next];
     });
-    setDirty((d) => ({ ...d, [id]: true }));
+    setDirty((d) => ({ ...d, [id]: ver }));
   }
 
   async function copyPrev() {
     if (locked) return;
     const prev = periodKey(shiftPeriod(period, -1));
-    const rows = members.filter((m) => !rowTotal(m.id) && allocIn(m.id, prev).length)
+    const rows = members.filter((m) => !rowTotal(m.id) && !dirtyRef.current[entryId(pKey, m.id)] && allocIn(m.id, prev).length)
       .map((m) => ({ employeeId: m.id, alloc: allocIn(m.id, prev).map((r) => ({ ...r })) }));
     if (!rows.length) return setToast("Немає що переносити: попередній період порожній або цей уже заповнений.");
-    const d = await save(rows, false);
-    if (d) setToast("Перенесли " + rows.length + " " + plural(rows.length, "рядок", "рядки", "рядків"));
+    const tid = teamId, key = pKey;
+    await lock();
+    try {
+      setSaving("saving");
+      const d = await put(tid, key, rows, false);
+      apply(d);
+      setSaving("ok");
+      setToast("Перенесли " + rows.length + " " + plural(rows.length, "рядок", "рядки", "рядків"));
+    } catch (e) { fail(e); }
+    finally { unlock(); }
   }
 
   async function submitPeriod() {
     const bad = members.filter((m) => Math.abs(rowTotal(m.id) - 100) > 0.01);
     if (bad.length) return setToast("Не подамо: у " + bad.length + " " + plural(bad.length, "людини", "людей", "людей") + " сума не 100%.");
     if (!window.confirm("Подати період «" + periodLabel(period) + "» для команди «" + team.name + "»? Після подання змінити відсотки зможе лише адміністратор.")) return;
-    const rows = members.map((m) => ({ employeeId: m.id, alloc: allocIn(m.id, pKey) }));
-    const d = await save(rows, true);
-    if (d) setToast("Період подано: " + team.name + ", " + periodLabel(period));
+    const tid = teamId, key = pKey, name = team.name, label = periodLabel(period);
+    await flush();
+    await lock();
+    try {
+      setSaving("saving");
+      const rows = members.map((m) => ({ employeeId: m.id, alloc: allocOf(entriesRef.current, m.id, key) }));
+      const d = await put(tid, key, rows, true);
+      apply(d);
+      setSaving("ok");
+      setToast("Період подано: " + name + ", " + label);
+    } catch (e) { fail(e); }
+    finally { unlock(); }
   }
 
   function exportXlsx() {
