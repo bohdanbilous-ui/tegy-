@@ -324,6 +324,9 @@ export default function TransferDesk() {
   const stateRef = useRef(null);
   const tokenRef = useRef("");
   const lastSync = useRef("");
+  const adopt = useRef(false);
+  const inFlight = useRef(false);
+  const syncAgain = useRef(false);
 
   const [loginName, setLoginName] = useState("");
   const [loginPick, setLoginPick] = useState("");
@@ -420,28 +423,48 @@ export default function TransferDesk() {
       try {
         const remote = await api.get({ token: tokenRef.current, name: user.name });
         setPersistent(remote._persistent !== false);
-        applyState(remote);
-        lastSync.current = JSON.stringify(remote);
+        adoptServer(remote);
         if ((remote.employees || []).length) setSelectedId(remote.employees[0].id);
         setSyncAt(new Date()); setSyncState("ok");
       } catch (e) { onApiError(e); }
     })();
   }, [ready, user]);
 
+  /* Синхронізація. lastSync — знімок стану, який збігається з сервером.
+     Після застосування відповіді сервера наступний рендер лише запам'ятовує
+     новий знімок (adopt), а не шле його назад — інакше виходить нескінченний
+     цикл PUT, і кожна відповідь перезаписує цифри, які людина саме вводить. */
+  function adoptServer(d) { applyState(d); adopt.current = true; }
+
   async function syncNow(silent) {
     if (!user || !user.isAdmin) return;
+    if (inFlight.current) { syncAgain.current = true; return; }
+    inFlight.current = true;
+    const sent = JSON.stringify(stateRef.current);
     try {
       if (!silent) setSyncState("saving");
       const merged = await api.put({ token: tokenRef.current, name: user.name }, stateRef.current);
-      const json = JSON.stringify(merged);
-      if (json !== lastSync.current) { lastSync.current = json; applyState(merged); }
+      if (JSON.stringify(stateRef.current) === sent) {
+        adoptServer(merged);
+      } else {
+        // Поки йшов запит, людина щось змінила: її свіжіші правки лишаються,
+        // чужі зміни з сервера підтягуються, і за мить відправляємо ще раз.
+        applyState(mergeState(stateRef.current, merged));
+        syncAgain.current = true;
+      }
       setSyncAt(new Date()); setSyncState("ok");
     } catch (e) { onApiError(e); }
+    finally {
+      inFlight.current = false;
+      if (syncAgain.current) { syncAgain.current = false; setTimeout(() => syncNow(true), 400); }
+    }
   }
 
   useEffect(() => {
     if (!ready || !user || !user.isAdmin) return;
-    if (JSON.stringify(snap()) === lastSync.current) return;
+    const cur = JSON.stringify(snap());
+    if (adopt.current) { adopt.current = false; lastSync.current = cur; return; }
+    if (cur === lastSync.current) return;
     const id = setTimeout(() => syncNow(false), 700);
     return () => clearTimeout(id);
   }, [employees, projects, partners, reasons, transfers, admins, log, deleted, pms, codes, teams, entries, settings, ready, user]);
@@ -508,7 +531,7 @@ export default function TransferDesk() {
     setUser({ ...u, signedInAt: new Date().toISOString() });
     setLoginError("");
   }
-  function signOut() { tokenRef.current = ""; setUser(null); setLoginPick(""); setLoginName(""); lastSync.current = ""; }
+  function signOut() { tokenRef.current = ""; setUser(null); setLoginPick(""); setLoginName(""); lastSync.current = ""; adopt.current = false; }
 
   /* ─── права ─────────────────────────────────────────────────────────────
      Розмежування працює в інтерфейсі: воно захищає від випадкових правок
@@ -694,11 +717,13 @@ export default function TransferDesk() {
   const isSubmitted = (t, key) => !!((t.submitted || {})[key || pKey]);
 
   function setCell(empId, project, value) {
-    const v = value === "" ? 0 : Number(value);
+    const n = value === "" ? 0 : Number(value);
+    if (!Number.isFinite(n)) return;
+    const v = Math.max(0, Math.min(100, n));
     setEntries((p) => {
       const id = entryId(empId, pKey), old = p.find((x) => x.id === id);
-      const rows = (old ? old.alloc : []).filter((r) => r.project !== project);
-      if (v > 0) rows.push({ project, percent: v });
+      const rows = (old ? old.alloc : []).map((r) => (r.project === project ? { ...r, percent: v } : r)).filter((r) => r.percent > 0);
+      if (v > 0 && !rows.some((r) => r.project === project)) rows.push({ project, percent: v });
       const next = { id, periodKey: pKey, employeeId: empId, alloc: rows, updatedAt: nowISO(), updatedBy: user ? user.name : "" };
       return old ? p.map((x) => (x.id === id ? next : x)) : [...p, next];
     });
