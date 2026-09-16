@@ -10,8 +10,8 @@ export const dynamic = "force-dynamic";
 Після першого успішного виклику ендпоінт назавжди вимикається.
 Далі людей додає адміністратор у «Довідник → Користувачі». */
 const SEED = [
-  { username: "bohdan.bilous", displayName: "Богдан Білоус", isAdmin: true },
-  { username: "mariia.lytvyn", displayName: "Марія Литвин", isAdmin: true },
+  { username: "bohdan.bilous", displayName: "Богдан Білоус", role: "admin" },
+  { username: "mariia.lytvyn", displayName: "Марія Литвин", role: "admin" },
   { username: "taras.mamai", displayName: "Тарас Мамай" },
   { username: "stanislav.stoiatskyi", displayName: "Станіслав Стояцький" },
   { username: "khrystyna.chepurna", displayName: "Христина Чепурна" },
@@ -47,8 +47,9 @@ export async function POST(request) {
   const users = SEED.map((s) => {
     const password = generatePassword();
     const { salt, hash } = hashPassword(password);
-    issued.push({ username: s.username, displayName: s.displayName, isAdmin: !!s.isAdmin, password });
-    return { username: s.username, displayName: s.displayName, isAdmin: !!s.isAdmin, salt, passwordHash: hash, createdAt: now, updatedAt: now, createdBy: "setup" };
+    const role = s.role || "owner";
+    issued.push({ username: s.username, displayName: s.displayName, role, isAdmin: role === "admin", password });
+    return { username: s.username, displayName: s.displayName, role, isAdmin: role === "admin", salt, passwordHash: hash, createdAt: now, updatedAt: now, createdBy: "setup" };
   });
   await writeUsers(users);
   return NextResponse.json({ users: issued });
