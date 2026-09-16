@@ -65,7 +65,7 @@ export default function Setup() {
                 {users.map((u) => (
                   <tr key={u.username}>
                     <td style={cell}>{u.displayName}</td>
-                    <td style={cell}>{u.isAdmin ? "адміністратор" : "відповідальний"}</td>
+                    <td style={cell}>{u.role === "admin" ? "адміністратор" : u.role === "hrd" ? "HRD" : "відповідальний"}</td>
                     <td style={{ ...cell, fontFamily: "monospace" }}>{u.username}</td>
                     <td style={{ ...cell, fontFamily: "monospace", userSelect: "all" }}>{u.password}</td>
                   </tr>
