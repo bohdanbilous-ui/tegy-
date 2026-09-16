@@ -1,13 +1,24 @@
 "use client";
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
-import { mergeState, nowISO, uniq } from "../lib/merge";
+import { mergeState, uniq } from "../lib/merge";
 import { api } from "../lib/api";
 import TeamDesk from "./TeamDesk";
 
 /* Вхід через Google: NEXT_PUBLIC_GOOGLE_CLIENT_ID і NEXT_PUBLIC_ALLOWED_DOMAIN.
    Токен перевіряється на сервері (app/api/state/route.js). */
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
+
+/* Позначки часу правок вирівнюються за годинником сервера: якщо годинник
+   комп'ютера відстає, свіжа правка інакше програла б злиттю. */
+let clockSkew = 0;
+const nowISO = () => new Date(Date.now() + clockSkew).toISOString();
+const learnClock = (serverNow, sentAt) => { const t = Date.parse(serverNow || ""); if (t) clockSkew = Math.max(0, t - sentAt + 1); };
+
+/* Ролі: admin — усе; hrd — переведення + табель своїх команд; owner — лише табель. */
+const roleOf = (u) => (!u ? "" : u.role || (u.isAdmin ? "admin" : "owner"));
+const deskUser = (u) => roleOf(u) === "admin" || roleOf(u) === "hrd";
+const ROLE_LABEL = { admin: "адміністратор", hrd: "HRD", owner: "відповідальний" };
 const ALLOWED_DOMAIN = process.env.NEXT_PUBLIC_ALLOWED_DOMAIN || "";
 
 const C = {
@@ -393,7 +404,7 @@ export default function TransferDesk() {
     setDeleted(d.deleted || {});
     setPms(d.pms || {});
     setCodes(d.codes || {});
-    setTeams((d.teams || []).length ? d.teams : SEED_TEAMS);
+    setTeams((d.teams || []).length || d._view === "hrd" ? (d.teams || []) : SEED_TEAMS);
     setEntries(d.entries || []);
     setSettings({ approvalMode: "give", ...(d.settings || {}) });
   }
@@ -418,10 +429,12 @@ export default function TransferDesk() {
   }
 
   useEffect(() => {
-    if (!ready || !user || !user.isAdmin) return;
+    if (!ready || !deskUser(user)) return;
     (async () => {
       try {
+        const sentAt = Date.now();
         const remote = await api.get({ token: tokenRef.current, name: user.name });
+        learnClock(remote._now, sentAt);
         setPersistent(remote._persistent !== false);
         adoptServer(remote);
         if ((remote.employees || []).length) setSelectedId(remote.employees[0].id);
@@ -437,13 +450,15 @@ export default function TransferDesk() {
   function adoptServer(d) { applyState(d); adopt.current = true; }
 
   async function syncNow(silent) {
-    if (!user || !user.isAdmin) return;
+    if (!deskUser(user)) return;
     if (inFlight.current) { syncAgain.current = true; return; }
     inFlight.current = true;
     const sent = JSON.stringify(stateRef.current);
     try {
       if (!silent) setSyncState("saving");
+      const sentAt = Date.now();
       const merged = await api.put({ token: tokenRef.current, name: user.name }, stateRef.current);
+      learnClock(merged._now, sentAt);
       if (JSON.stringify(stateRef.current) === sent) {
         adoptServer(merged);
       } else {
@@ -461,7 +476,7 @@ export default function TransferDesk() {
   }
 
   useEffect(() => {
-    if (!ready || !user || !user.isAdmin) return;
+    if (!ready || !deskUser(user)) return;
     const cur = JSON.stringify(snap());
     if (adopt.current) { adopt.current = false; lastSync.current = cur; return; }
     if (cur === lastSync.current) return;
@@ -470,7 +485,7 @@ export default function TransferDesk() {
   }, [employees, projects, partners, reasons, transfers, admins, log, deleted, pms, codes, teams, entries, settings, ready, user]);
 
   useEffect(() => {
-    if (!ready || !user || !user.isAdmin) return;
+    if (!ready || !deskUser(user)) return;
     const id = setInterval(() => { if (!document.hidden) syncNow(true); }, 60000);
     return () => clearInterval(id);
   }, [ready, user]);
@@ -539,7 +554,9 @@ export default function TransferDesk() {
      захист дає бекенд, який перевіряє, хто робить запит. Хто адміністратор,
      а хто — відповідальний лише за свою команду, вирішується на сервері за
      обліковим записом (lib/users.js), а не тут. ─────────────────────────── */
-  const isAdmin = !!user && !!user.isAdmin;
+  const role = roleOf(user);
+  const isAdmin = role === "admin";
+  const isHrd = role === "hrd";
   const allPMs = useMemo(() => uniq(Object.values(pms)), [pms]);
   const isPMof = (project) => !!user && (pms[project] || "").toLowerCase() === user.name.toLowerCase();
   const canDecide = (a) => isAdmin || isPMof(a.project);
@@ -1247,7 +1264,7 @@ export default function TransferDesk() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setLoginError(data.error || "Не вдалося увійти."); return; }
-      signIn({ name: data.name, username: n.toLowerCase(), email: "", source: "manual", token: data.token, isAdmin: !!data.isAdmin });
+      signIn({ name: data.name, username: n.toLowerCase(), email: "", source: "manual", token: data.token, role: data.role, isAdmin: !!data.isAdmin });
     } catch (e) {
       setLoginError("Немає з'єднання з сервером.");
     } finally {
@@ -1255,7 +1272,7 @@ export default function TransferDesk() {
     }
   }
 
-  if (!isAdmin) {
+  if (!isAdmin && !isHrd) {
     return (
       <TeamDesk
         user={user}
@@ -1281,7 +1298,7 @@ export default function TransferDesk() {
             </div>
             <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10, fontSize: 13 }}>
               <span style={{ color: C.ink2 }}>{user.name}{user.email ? " · " + user.email : ""}</span>
-              {isAdmin && <span style={{ background: C.signalSoft, color: C.signal, borderRadius: 3, padding: "2px 8px", fontSize: 12, fontWeight: 600 }}>адміністратор</span>}
+              <span style={{ background: C.signalSoft, color: C.signal, borderRadius: 3, padding: "2px 8px", fontSize: 12, fontWeight: 600 }}>{ROLE_LABEL[role]}</span>
               <button className="link" onClick={() => syncNow(false)} disabled={offline}
                 title={offline ? "Спільне сховище недоступне" : "Оновити дані з спільного сховища"}
                 style={{ color: syncState === "error" ? C.stop : C.muted, textDecoration: "none" }}>
@@ -1296,7 +1313,8 @@ export default function TransferDesk() {
           <nav style={{ display: "flex", gap: 4, marginTop: 14, flexWrap: "wrap" }}>
             {[["form", "Нове переведення"], ["journal", "Журнал"],
               ["approve", "Погодження" + (myPending.length ? " · " + myPending.length : "")],
-              ["snap", "Зріз на дату"], ["teams", "Команди і теги"], ["report", "Звіт по місяцях"], ["lists", "Довідник"]].map(([k, l]) => (
+              ["snap", "Зріз на дату"], ["teams", "Команди і теги"], ["report", "Звіт по місяцях"], ["lists", "Довідник"]]
+              .filter(([k]) => isAdmin || !["approve", "lists"].includes(k)).map(([k, l]) => (
               <button key={k} onClick={() => setTab(k)} aria-current={tab === k}
                 style={{ cursor: "pointer", background: "none", border: "none", padding: "10px 14px",
                   color: tab === k ? C.ink : C.muted, fontWeight: tab === k ? 600 : 400,
@@ -1321,8 +1339,8 @@ export default function TransferDesk() {
               Залийте вигрузку зі своєї HR-системи — Excel або CSV — і люди з'являться тут разом із посадами та проєктами.
             </p>
             <div style={{ display: "flex", gap: 10, justifyContent: "center", marginTop: 20, flexWrap: "wrap" }}>
-              <button style={{ ...addBtn, background: C.signal, padding: "12px 22px", fontWeight: 600 }}
-                onClick={() => { setTab("lists"); setBook("emp"); }}>Перейти до довідника</button>
+              {isAdmin && <button style={{ ...addBtn, background: C.signal, padding: "12px 22px", fontWeight: 600 }}
+                onClick={() => { setTab("lists"); setBook("emp"); }}>Перейти до довідника</button>}
               <button className="ghost" onClick={() => buildTemplate(allProjects, partners)}>Завантажити шаблон</button>
             </div>
           </section>
@@ -1557,7 +1575,7 @@ export default function TransferDesk() {
         )}
 
         {/* ── ПОГОДЖЕННЯ ── */}
-        {tab === "approve" && (() => {
+        {tab === "approve" && isAdmin && (() => {
           const mode = settings.approvalMode;
           const card2 = (t, onlyMine) => {
             const list = (t.approvals || []).filter((a) => !onlyMine || (a.status === "pending" && canDecide(a)));
@@ -1722,14 +1740,14 @@ export default function TransferDesk() {
               {noCode.length > 0 && (
                 <p style={{ margin: "12px 0 0", background: C.warnSoft, border: "1px solid #E6CFA6", borderRadius: 3, padding: "10px 12px", color: C.warn }}>
                   Без коду {noCode.length} {plural(noCode.length, "проєкт", "проєкти", "проєктів")} — у тезі вони стануть «?».
-                  <button className="link" style={{ marginLeft: 8, color: C.warn }} onClick={() => { setTab("lists"); setBook("proj"); }}>Задати коди</button>
+                  {isAdmin ? <button className="link" style={{ marginLeft: 8, color: C.warn }} onClick={() => { setTab("lists"); setBook("proj"); }}>Задати коди</button> : " Коди задає адміністратор."}
                 </p>
               )}
             </section>
 
             {teams.length === 0 && (
               <section style={{ ...card, padding: 30, textAlign: "center", color: C.muted }}>
-                Команд ще немає. Створюються в «Довідник → Налаштування».
+                {isAdmin ? "Команд ще немає. Створюються в «Довідник → Налаштування»." : "За вами поки не закріплено жодної команди. Попросіть адміністратора вписати «" + user.name + "» у поле «Відповідальний за %»."}
               </section>
             )}
 
@@ -1764,14 +1782,14 @@ export default function TransferDesk() {
 
                   {members.length === 0 ? (
                     <p style={{ padding: "18px 20px", margin: 0, color: C.muted }}>
-                      До команди ще нікого не прикріплено. Внизу є поле «Прикріпити людину» — у підказках ті, хто ще не в жодній команді.
+                      {isAdmin ? "До команди ще нікого не прикріплено. Внизу є поле «Прикріпити людину» — у підказках ті, хто ще не в жодній команді." : "До команди ще нікого не прикріплено — людей додає адміністратор."}
                     </p>
                   ) : cols.length === 0 ? (
                     <p style={{ padding: "18px 20px", margin: 0, color: C.muted }}>
                       {orderedProjects.length === 0
                         ? "У довіднику ще немає жодного проєкту — колонки беруться звідти. "
                         : "У цьому періоді ще нічого не заповнено. "}
-                      <button className="link" onClick={() => { setTab("lists"); setBook("proj"); }}>Відкрити довідник проєктів</button>
+                      {isAdmin && <button className="link" onClick={() => { setTab("lists"); setBook("proj"); }}>Відкрити довідник проєктів</button>}
                     </p>
                   ) : (
                     <div style={{ overflowX: "auto" }}>
@@ -1838,15 +1856,19 @@ export default function TransferDesk() {
                           {isAdmin && <button className="link" style={{ marginLeft: 8 }} onClick={() => reopenPeriod(t)}>Відкрити знову</button>}
                         </span>
                       )}
-                      <input type="text" list={"free-" + t.id} value={addMember[t.id] || ""} placeholder="Прикріпити людину"
-                        aria-label={"Додати людину до " + t.name} style={{ flex: "1 1 200px", width: "auto", marginLeft: "auto" }}
-                        onChange={(e) => setAddMember((m) => ({ ...m, [t.id]: e.target.value }))} />
-                      <datalist id={"free-" + t.id}>{free.map((e) => <option key={e.id} value={e.name}>{e.position}</option>)}</datalist>
-                      <button className="ghost" onClick={() => {
-                        const f = free.find((x) => x.name === (addMember[t.id] || "").trim());
-                        if (!f) return setToast("Оберіть людину зі списку — там ті, хто ще не в команді.");
-                        joinTeam(f.id, t.id); setAddMember((m) => ({ ...m, [t.id]: "" }));
-                      }}>Прикріпити</button>
+                      {isAdmin && (
+                        <>
+                          <input type="text" list={"free-" + t.id} value={addMember[t.id] || ""} placeholder="Прикріпити людину"
+                            aria-label={"Додати людину до " + t.name} style={{ flex: "1 1 200px", width: "auto", marginLeft: "auto" }}
+                            onChange={(e) => setAddMember((m) => ({ ...m, [t.id]: e.target.value }))} />
+                          <datalist id={"free-" + t.id}>{free.map((e) => <option key={e.id} value={e.name}>{e.position}</option>)}</datalist>
+                          <button className="ghost" onClick={() => {
+                            const f = free.find((x) => x.name === (addMember[t.id] || "").trim());
+                            if (!f) return setToast("Оберіть людину зі списку — там ті, хто ще не в команді.");
+                            joinTeam(f.id, t.id); setAddMember((m) => ({ ...m, [t.id]: "" }));
+                          }}>Прикріпити</button>
+                        </>
+                      )}
                     </div>
                   )}
 
@@ -1987,7 +2009,7 @@ export default function TransferDesk() {
         )}
 
         {/* ── ДОВІДНИК ── */}
-        {tab === "lists" && (
+        {tab === "lists" && isAdmin && (
           <div style={{ display: "grid", gap: 18 }}>
             {listNote && <p role="status" style={{ margin: 0, background: C.signalSoft, border: "1px solid #A9D5D8", borderRadius: 3, padding: "10px 14px", color: C.ink2 }}>{listNote}</p>}
 
@@ -2556,7 +2578,7 @@ function UsersBook({ token, me }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [secret, setSecret] = useState(null);
-  const [form, setForm] = useState({ username: "", displayName: "", password: "", isAdmin: false });
+  const [form, setForm] = useState({ username: "", displayName: "", password: "", role: "owner" });
 
   const card = { background: C.surface, border: "1px solid " + C.line, borderRadius: 4 };
   const label = { fontSize: 12, fontWeight: 600, color: C.muted, marginBottom: 6, display: "block" };
@@ -2594,7 +2616,7 @@ function UsersBook({ token, me }) {
     try {
       const d = await call("POST", form);
       setSecret({ username: d.user.username, displayName: d.user.displayName, password: d.password });
-      setForm({ username: "", displayName: "", password: "", isAdmin: false });
+      setForm({ username: "", displayName: "", password: "", role: "owner" });
       load();
     } catch (e) {
       setError(e.message);
@@ -2629,8 +2651,9 @@ function UsersBook({ token, me }) {
       <div style={{ padding: "16px 18px", borderBottom: "1px solid " + C.lineSoft }}>
         <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 20, fontWeight: 600 }}>Користувачі й ролі</h2>
         <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>
-          <b>Адміністратор</b> бачить і править усе. <b>Відповідальний</b> бачить лише команду, де його ім'я стоїть у полі «Відповідальний за %»
-          (Довідник → Налаштування), вносить відсотки й подає період. Чужі команди сервер йому не віддає.
+          <b>Адміністратор</b> бачить і править усе. <b>HRD</b> веде табель своєї команди й проводить переведення (правити може лише свої).{" "}
+          <b>Відповідальний</b> бачить лише команду, де його ім'я стоїть у полі «Відповідальний за %» (Довідник → Налаштування),
+          вносить відсотки й подає період. Чужі команди сервер їм не віддає.
         </p>
       </div>
 
@@ -2660,7 +2683,7 @@ function UsersBook({ token, me }) {
             <tr>
               <th>Логін</th>
               <th>Ім'я (як у «Відповідальний за %»)</th>
-              <th style={{ width: 150 }}>Роль</th>
+              <th style={{ width: 190 }}>Роль</th>
               <th style={{ width: 240 }} />
             </tr>
           </thead>
@@ -2691,30 +2714,22 @@ function UsersBook({ token, me }) {
                     <TextCell value={u.displayName} aria={"Ім'я " + u.username} onCommit={(v) => patch(u.username, { displayName: v })} />
                   </td>
                   <td>
-                    <button
+                    <select
+                      value={roleOf(u)}
                       disabled={self}
-                      onClick={() =>
-                        patch(
-                          u.username,
-                          { isAdmin: !u.isAdmin },
-                          u.isAdmin
-                            ? "Зняти права адміністратора з «" + u.displayName + "»?"
-                            : "Зробити «" + u.displayName + "» адміністратором? Він бачитиме й правитиме все.",
-                        )
-                      }
-                      title={self ? "Власну роль змінює інший адміністратор" : "Перемкнути роль"}
-                      style={{
-                        cursor: self ? "default" : "pointer",
-                        padding: "5px 10px",
-                        borderRadius: 3,
-                        fontSize: 12,
-                        border: "1px solid " + (u.isAdmin ? C.ink2 : C.line),
-                        background: u.isAdmin ? C.ink : C.surface,
-                        color: u.isAdmin ? "#fff" : C.ink2,
+                      title={self ? "Власну роль змінює інший адміністратор" : "Змінити роль"}
+                      aria-label={"Роль " + u.displayName}
+                      onChange={(e) => {
+                        const r = e.target.value;
+                        patch(u.username, { role: r }, "Змінити роль «" + u.displayName + "» на «" + ROLE_LABEL[r] + "»?" +
+                          (r === "admin" ? " Адміністратор бачить і править усе." : r === "hrd" ? " HRD проводитиме переведення й вестиме табель своєї команди." : ""));
                       }}
+                      style={{ padding: "6px 8px", minWidth: 170 }}
                     >
-                      {u.isAdmin ? "адміністратор" : "відповідальний"}
-                    </button>
+                      <option value="owner">відповідальний</option>
+                      <option value="hrd">HRD</option>
+                      <option value="admin">адміністратор</option>
+                    </select>
                   </td>
                   <td style={{ whiteSpace: "nowrap" }}>
                     <button
@@ -2779,10 +2794,14 @@ function UsersBook({ token, me }) {
             />
           </div>
           <div>
-            <label style={{ ...label, display: "flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
-              <input type="checkbox" checked={form.isAdmin} onChange={(e) => setForm((f) => ({ ...f, isAdmin: e.target.checked }))} />
-              адміністратор
+            <label style={label} htmlFor="nu-role">
+              Роль
             </label>
+            <select id="nu-role" value={form.role} onChange={(e) => setForm((f) => ({ ...f, role: e.target.value }))} style={{ marginBottom: 8 }}>
+              <option value="owner">відповідальний</option>
+              <option value="hrd">HRD</option>
+              <option value="admin">адміністратор</option>
+            </select>
             <button style={{ ...addBtn, width: "100%" }} onClick={create}>
               Створити
             </button>
