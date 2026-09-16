@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { readState, writeState } from "../../../lib/store";
 import { whoIs } from "../../../lib/auth";
 import { sameName } from "../../../lib/users";
+import { cleanHours, hoursToAlloc } from "../../../lib/hours";
 
 export const dynamic = "force-dynamic";
 
@@ -48,7 +49,8 @@ export async function GET(request) {
   return NextResponse.json(sliceFor(state, g.me));
 }
 
-/* Тіло: { teamId, periodKey, rows: [{ employeeId, alloc: [{ project, percent }] }], submit } */
+/* Тіло: { teamId, periodKey, rows: [{ employeeId, alloc: [{ project, percent }], hours?: [{ project, hours }] }], submit }
+   Якщо рядок прийшов у годинах, відсотки рахує сервер — з годин. */
 export async function PUT(request) {
   const g = await guardUser(request);
   if (g.res) return g.res;
@@ -81,6 +83,12 @@ export async function PUT(request) {
     if (!memberIds.has(r?.employeeId)) {
       return NextResponse.json({ error: "Людина не належить до команди «" + team.name + "»." }, { status: 403 });
     }
+    if (Array.isArray(r.hours) && r.hours.length) {
+      const hours = cleanHours(r.hours);
+      if (!hours) return NextResponse.json({ error: "Забагато годин: у періоді їх не може бути більше 744." }, { status: 400 });
+      clean.push({ employeeId: r.employeeId, alloc: hoursToAlloc(hours), hours });
+      continue;
+    }
     const alloc = [];
     for (const a of Array.isArray(r.alloc) ? r.alloc : []) {
       const project = String(a?.project || "").trim().slice(0, 120);
@@ -96,7 +104,7 @@ export async function PUT(request) {
   const entries = [...(state.entries || [])];
   for (const r of clean) {
     const id = entryId(periodKey, r.employeeId);
-    const next = { id, periodKey, employeeId: r.employeeId, alloc: r.alloc, updatedAt: stamp, updatedBy: me.name };
+    const next = { id, periodKey, employeeId: r.employeeId, alloc: r.alloc, ...(r.hours && r.hours.length ? { hours: r.hours } : {}), updatedAt: stamp, updatedBy: me.name };
     const i = entries.findIndex((x) => x.id === id);
     if (i === -1) entries.push(next); else entries[i] = next;
   }
