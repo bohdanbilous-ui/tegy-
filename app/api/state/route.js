@@ -3,6 +3,7 @@ import { mergeState, nowISO } from "../../../lib/merge";
 import { readState, writeState, persistent } from "../../../lib/store";
 import { whoIs } from "../../../lib/auth";
 import { sameName } from "../../../lib/users";
+import { cleanHours, hoursToAlloc } from "../../../lib/hours";
 
 export const dynamic = "force-dynamic";
 
@@ -122,6 +123,12 @@ function guardHrd(stored, inc, me) {
     if (old && (same(old, x) || !newer(x, old))) continue;
     const team = tmBefore.get(empTeam.get(x.employeeId));
     if (!team || !own.has(team.id)) return "вносити відсотки можна лише для людей своєї команди";
+    if (Array.isArray(x.hours) && x.hours.length) {
+      const hours = cleanHours(x.hours);
+      if (!hours) return "забагато годин: у періоді їх не може бути більше 744";
+      x.hours = hours;
+      x.alloc = hoursToAlloc(hours);
+    }
     if ((team.submitted || {})[x.periodKey]) return "період уже подано — відкрити його може адміністратор";
     x.updatedBy = me.name;
   }
