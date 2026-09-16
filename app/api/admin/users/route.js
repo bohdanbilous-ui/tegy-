@@ -2,8 +2,11 @@ import { NextResponse } from "next/server";
 import { whoIs } from "../../../../lib/auth";
 import {
   readUsers, writeUsers, normalizeUsername, hashPassword, generatePassword,
-  publicUser, USERNAME_RE, MIN_PASSWORD,
+  publicUser, USERNAME_RE, MIN_PASSWORD, ROLES, roleOf, withRole,
 } from "../../../../lib/users";
+
+// Роль із запиту: нове поле role або старий прапорець isAdmin.
+const roleFrom = (body) => (ROLES.includes(body.role) ? body.role : typeof body.isAdmin === "boolean" ? (body.isAdmin ? "admin" : "owner") : null);
 
 export const dynamic = "force-dynamic";
 
@@ -49,7 +52,7 @@ export async function POST(request) {
   const password = body.password ? String(body.password) : generatePassword();
   const { salt, hash } = hashPassword(password);
   const now = new Date().toISOString();
-  const user = { username, displayName, isAdmin: !!body.isAdmin, salt, passwordHash: hash, createdAt: now, updatedAt: now, createdBy: g.me.username };
+  const user = withRole({ username, displayName, salt, passwordHash: hash, createdAt: now, updatedAt: now, createdBy: g.me.username }, roleFrom(body) || "owner");
   await writeUsers([...users, user]);
   return NextResponse.json({ user: publicUser(user), password });
 }
@@ -64,7 +67,7 @@ export async function PATCH(request) {
   const users = await readUsers();
   const i = users.findIndex((u) => u.username === username);
   if (i === -1) return bad("Користувача не знайдено.", 404);
-  const next = { ...users[i] };
+  let next = { ...users[i] };
 
   if (typeof body.displayName === "string") {
     const dn = body.displayName.trim().replace(/\s+/g, " ");
@@ -72,10 +75,11 @@ export async function PATCH(request) {
     if (users.some((u, j) => j !== i && u.displayName.toLowerCase() === dn.toLowerCase())) return bad("Таке ім'я вже має інший користувач.", 409);
     next.displayName = dn;
   }
-  if (typeof body.isAdmin === "boolean" && body.isAdmin !== !!next.isAdmin) {
+  const role = roleFrom(body);
+  if (role && role !== roleOf(next)) {
     if (username === g.me.username) return bad("Власну роль змінює інший адміністратор.");
-    if (!body.isAdmin && !users.some((u, j) => j !== i && u.isAdmin)) return bad("Має лишитись хоча б один адміністратор.");
-    next.isAdmin = body.isAdmin;
+    if (roleOf(next) === "admin" && !users.some((u, j) => j !== i && roleOf(u) === "admin")) return bad("Має лишитись хоча б один адміністратор.");
+    next = withRole(next, role);
   }
   let password;
   if (body.resetPassword || body.password) {
@@ -100,7 +104,7 @@ export async function DELETE(request) {
   const users = await readUsers();
   const target = users.find((u) => u.username === username);
   if (!target) return bad("Користувача не знайдено.", 404);
-  if (target.isAdmin && users.filter((u) => u.isAdmin).length <= 1) return bad("Має лишитись хоча б один адміністратор.");
+  if (roleOf(target) === "admin" && users.filter((u) => roleOf(u) === "admin").length <= 1) return bad("Має лишитись хоча б один адміністратор.");
   await writeUsers(users.filter((u) => u.username !== username));
   return NextResponse.json({ ok: true });
 }
