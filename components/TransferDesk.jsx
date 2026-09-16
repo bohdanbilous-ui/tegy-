@@ -3,7 +3,6 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
 import { mergeState, uniq } from "../lib/merge";
 import { hoursToAlloc, hoursTotal, hoursText, hasHours, MAX_HOURS } from "../lib/hours";
-import Dashboard from "./Dashboard";
 import { api } from "../lib/api";
 import TeamDesk from "./TeamDesk";
 
@@ -1012,28 +1011,6 @@ export default function TransferDesk() {
       rows: [["Проєкт", "Код"], ...allProjects.map((p) => [p, codes[p] || ""])] },
   ]);
 
-  /* Розподіл за місяць для кожної людини: знімок закритого місяця, ручне коригування
-     або зведення двох половин. Спільне для дашборда. */
-  const monthAllocs = useMemo(() => (y, m) => {
-    const key = monthKeyOf(y, m), k1 = periodKey(y, m, 1), k2 = periodKey(y, m, 2);
-    const map = new Map();
-    const close = fin.find((x) => x.id === "fc_" + key);
-    if (close && close.closed) {
-      (close.rows || []).forEach((s) => map.set(s.e, (s.a || []).map(([project, percent]) => ({ project, percent: Number(percent) || 0 }))));
-      return { map, closed: true };
-    }
-    const halves = new Map();
-    entries.forEach((x) => {
-      if (x.periodKey !== k1 && x.periodKey !== k2) return;
-      const r = halves.get(x.employeeId) || {};
-      r[x.periodKey === k1 ? "a1" : "a2"] = x.alloc;
-      halves.set(x.employeeId, r);
-    });
-    halves.forEach((r, id) => { const a = mergeHalves(r.a1, r.a2, lastDay(y, m)); if (a.length) map.set(id, a); });
-    fin.forEach((x) => { if (x.kind === "override" && x.monthKey === key && x.alloc) map.set(x.employeeId, asAlloc(x.alloc).filter((r) => r.percent > 0)); });
-    return { map, closed: false };
-  }, [entries, fin]);
-
   /* ─── місяць для фін. обліку ────────────────────────────────────────── */
   const finKey = monthKeyOf(finMonth.y, finMonth.m);
   const finDays = lastDay(finMonth.y, finMonth.m);
@@ -1527,8 +1504,8 @@ export default function TransferDesk() {
           <nav style={{ display: "flex", gap: 4, marginTop: 14, flexWrap: "wrap" }}>
             {[["form", "Нове переведення"], ["journal", "Журнал"],
               ["approve", "Погодження" + (myPending.length ? " · " + myPending.length : "")],
-              ["snap", "Зріз на дату"], ["teams", "Команди і теги"], ["fin", "Місяць · фін. облік"], ["report", "Звіт по місяцях"], ["dash", "Дашборд"], ["lists", "Довідник"]]
-              .filter(([k]) => isAdmin || !["approve", "lists", "fin", "dash"].includes(k)).map(([k, l]) => (
+              ["snap", "Зріз на дату"], ["teams", "Команди і теги"], ["fin", "Місяць · фін. облік"], ["report", "Звіт по місяцях"], ["lists", "Довідник"]]
+              .filter(([k]) => isAdmin || !["approve", "lists", "fin"].includes(k)).map(([k, l]) => (
               <button key={k} onClick={() => setTab(k)} aria-current={tab === k}
                 style={{ cursor: "pointer", background: "none", border: "none", padding: "10px 14px",
                   color: tab === k ? C.ink : C.muted, fontWeight: tab === k ? 600 : 400,
@@ -2139,12 +2116,6 @@ export default function TransferDesk() {
               );
             })}
           </div>
-        )}
-
-        {/* ── ДАШБОРД ── */}
-        {tab === "dash" && isAdmin && (
-          <Dashboard employees={employees} transfers={transfers} entries={entries} teams={teams} codes={codes} fin={fin}
-            today={today} allocAt={(e, d) => allocAt(e, transfers, d)} monthAllocs={monthAllocs} onOpenPerson={setCardId} />
         )}
 
         {/* ── МІСЯЦЬ ДЛЯ ФІН. ОБЛІКУ ── */}
