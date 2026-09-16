@@ -6,7 +6,7 @@ import { sameName } from "../../../lib/users";
 
 export const dynamic = "force-dynamic";
 
-const EMPTY = { employees: [], projects: [], partners: [], reasons: [], transfers: [], admins: [], log: [], deleted: {}, pms: {}, codes: {}, teams: [], entries: [], settings: { approvalMode: "give" } };
+const EMPTY = { employees: [], projects: [], partners: [], reasons: [], transfers: [], admins: [], log: [], deleted: {}, pms: {}, codes: {}, teams: [], entries: [], fin: [], settings: { approvalMode: "give" } };
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const byId = (list) => new Map((list || []).map((x) => [x.id, x]));
 const newer = (a, b) => (a && a.updatedAt || "") > (b && b.updatedAt || "");
@@ -39,6 +39,7 @@ function viewFor(state, me) {
     teams: (state.teams || []).filter((t) => own.has(t.id)),
     entries: (state.entries || []).filter((x) => ownPeople.has(x.employeeId)),
     log: (state.log || []).filter((l) => sameName(l.who, me.name)),
+    fin: [], // місяць для фін. обліку — лише адміністратор
   };
 }
 
@@ -90,6 +91,7 @@ function guardHrd(stored, inc, me) {
   inc.codes = stored.codes || {};
   inc.settings = stored.settings || {};
   inc.admins = stored.admins || [];
+  inc.fin = stored.fin || [];
   inc.log = (inc.log || []).filter((l) => sameName(l.who, me.name));
 
   // Команди: лише свої, і лише подання періоду.
