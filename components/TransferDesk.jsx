@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
 import { mergeState, uniq } from "../lib/merge";
+import { hoursToAlloc, hoursTotal, hoursText, hasHours, MAX_HOURS } from "../lib/hours";
 import { api } from "../lib/api";
 import TeamDesk from "./TeamDesk";
 
@@ -403,6 +404,7 @@ export default function TransferDesk() {
   const [openMember, setOpenMember] = useState(null);
   const [addMember, setAddMember] = useState({});
   const [compact, setCompact] = useState({});
+  const [units, setUnits] = useState({}); // команда → "pct" | "h"; порожньо — за даними періоду
   const [listNote, setListNote] = useState("");
   const [book, setBook] = useState("emp");
   const [empQuery, setEmpQuery] = useState("");
@@ -766,10 +768,28 @@ export default function TransferDesk() {
       const id = entryId(empId, pKey), old = p.find((x) => x.id === id);
       const rows = (old ? old.alloc : []).map((r) => (r.project === project ? { ...r, percent: v } : r)).filter((r) => r.percent > 0);
       if (v > 0 && !rows.some((r) => r.project === project)) rows.push({ project, percent: v });
+      // Внесли відсотки — години рядка більше не діють.
       const next = { id, periodKey: pKey, employeeId: empId, alloc: rows, updatedAt: nowISO(), updatedBy: user ? user.name : "" };
       return old ? p.map((x) => (x.id === id ? next : x)) : [...p, next];
     });
   }
+  function setHoursCell(empId, project, value) {
+    const n = value === "" ? 0 : Number(value);
+    if (!Number.isFinite(n)) return;
+    const v = Math.max(0, Math.min(MAX_HOURS, n));
+    setEntries((p) => {
+      const id = entryId(empId, pKey), old = p.find((x) => x.id === id);
+      // Нуль лишаємо, поки людина друкує (напр. «0.5»); порожня клітинка — проєкт прибирається.
+      let hrs = (hasHours(old) ? old.hours : []).map((h) => (h.project === project ? { ...h, hours: v } : h));
+      if (value === "") hrs = hrs.filter((h) => h.project !== project);
+      else if (!hrs.some((h) => h.project === project)) hrs.push({ project, hours: v });
+      const next = { id, periodKey: pKey, employeeId: empId, hours: hrs, alloc: hoursToAlloc(hrs), updatedAt: nowISO(), updatedBy: user ? user.name : "" };
+      return old ? p.map((x) => (x.id === id ? next : x)) : [...p, next];
+    });
+  }
+  const hoursIn = (empId, key) => { const x = entryOf(empId, key || pKey); return hasHours(x) ? x.hours : []; };
+  const hoursValue = (empId, project) => { const h = hoursIn(empId).find((x) => x.project === project); return h ? h.hours : ""; };
+  const unitOf = (t) => units[t.id] || (teamMembers(t.id).some((e) => hasHours(entryOf(e.id, pKey))) ? "h" : "pct");
   const cellValue = (empId, project) => {
     const r = allocIn(empId, pKey).find((x) => x.project === project);
     return r ? r.percent : "";
@@ -800,7 +820,9 @@ export default function TransferDesk() {
     const add = [];
     teamMembers(t.id).forEach((e) => {
       const src = allocIn(e.id, prev);
-      if (src.length && !rowTotal(e.id)) add.push({ id: entryId(e.id, pKey), periodKey: pKey, employeeId: e.id, alloc: src.map((r) => ({ ...r })), updatedAt: nowISO(), updatedBy: user ? user.name : "" });
+      const srcH = hoursIn(e.id, prev);
+      if (src.length && !rowTotal(e.id)) add.push({ id: entryId(e.id, pKey), periodKey: pKey, employeeId: e.id, alloc: src.map((r) => ({ ...r })),
+        ...(srcH.length ? { hours: srcH.map((h) => ({ ...h })) } : {}), updatedAt: nowISO(), updatedBy: user ? user.name : "" });
     });
     if (!add.length) return setToast("Немає що переносити: попередній період порожній або цей уже заповнений.");
     setEntries((p) => [...p.filter((x) => !add.some((a) => a.id === x.id)), ...add]);
@@ -967,19 +989,19 @@ export default function TransferDesk() {
   }, [transfers, year, allProjects, employees, today]);
 
   const exportTags = () => downloadXlsx("tegy-" + pKey + ".xlsx", [
-    { name: "Табель " + pKey, freeze: 1, cols: [26, 24, 24, 34, 40, 12],
-      rows: [["Співробітник", "Посада", "Команда", "Розподіл", "Тег", "Разом, %"],
+    { name: "Табель " + pKey, freeze: 1, cols: [26, 24, 24, 34, 40, 12, 40, 12],
+      rows: [["Співробітник", "Посада", "Команда", "Розподіл", "Тег", "Разом, %", "Години", "Годин разом"],
         ...teams.flatMap((t) => teamMembers(t.id).map((e) => {
-          const a = allocIn(e.id, pKey);
-          return [e.name, e.position || "", t.name, a.length ? allocText(a) : "", tagOf(a, codes), rowTotal(e.id)];
+          const a = allocIn(e.id, pKey), h = hoursIn(e.id);
+          return [e.name, e.position || "", t.name, a.length ? allocText(a) : "", tagOf(a, codes), rowTotal(e.id), hoursText(h), h.length ? hoursTotal(h) : ""];
         }))] },
-    { name: "Історія", freeze: 1, cols: [22, 26, 24, 40, 12, 22],
-      rows: [["Період", "Співробітник", "Команда", "Тег", "Разом, %", "Оновив"],
+    { name: "Історія", freeze: 1, cols: [22, 26, 24, 40, 12, 10, 22],
+      rows: [["Період", "Співробітник", "Команда", "Тег", "Разом, %", "Годин", "Оновив"],
         ...entries.slice().sort((a, b) => b.periodKey.localeCompare(a.periodKey)).map((x) => {
           const e = employees.find((y) => y.id === x.employeeId) || {};
           const t = teams.find((y) => y.id === e.teamId) || {};
           return [x.periodKey, e.name || x.employeeId, t.name || "", tagOf(x.alloc, codes),
-            (x.alloc || []).reduce((a2, r) => a2 + (Number(r.percent) || 0), 0), x.updatedBy || ""];
+            (x.alloc || []).reduce((a2, r) => a2 + (Number(r.percent) || 0), 0), hasHours(x) ? hoursTotal(x.hours) : "", x.updatedBy || ""];
         })] },
     { name: "Команди", freeze: 1, cols: [28, 24, 16, 10, 24],
       rows: [["Команда", "Відповідальний", "Заповнено", "Людей", "Період подано"],
@@ -1904,6 +1926,7 @@ export default function TransferDesk() {
               </div>
               <p style={{ margin: "10px 0 0", color: C.muted, fontSize: 12.5 }}>
                 Відсотки подають за 01–15 і 16–кінець місяця. Кожен період зберігається окремо, тож історія лишається.
+                Можна вносити години (перемикач «% / години» у команді): відсоток проєкту — його частка від усіх годин людини.
                 Тег кожної людини збирається з її рядка.
               </p>
               {noCode.length > 0 && (
@@ -1922,7 +1945,7 @@ export default function TransferDesk() {
 
             {teams.map((t) => {
               const members = teamMembers(t.id), mine = canEditTeam(t), cols = teamColumns(t);
-              const sub = (t.submitted || {})[pKey], locked = !mine || !!sub;
+              const sub = (t.submitted || {})[pKey], locked = !mine || !!sub, inHours = unitOf(t) === "h";
               const free = employees.filter((e) => !e.teamId);
               const hist = showHistory === t.id;
               return (
@@ -1940,7 +1963,15 @@ export default function TransferDesk() {
                         подано · {sub.by}, {fmtDT(sub.at)}
                       </span>
                     )}
-                    <button className="link" style={{ marginLeft: "auto", fontSize: 12.5 }}
+                    <div role="group" aria-label={"Одиниці табеля " + t.name} style={{ display: "flex", marginLeft: "auto" }}>
+                      {[["pct", "%"], ["h", "години"]].map(([k, l]) => (
+                        <button key={k} onClick={() => setUnits((u) => ({ ...u, [t.id]: k }))} aria-pressed={unitOf(t) === k}
+                          style={{ cursor: "pointer", padding: "4px 12px", fontSize: 12.5, border: "1px solid " + (unitOf(t) === k ? C.ink2 : C.line),
+                            background: unitOf(t) === k ? C.ink : C.surface, color: unitOf(t) === k ? "#fff" : C.ink2,
+                            borderRadius: k === "pct" ? "3px 0 0 3px" : "0 3px 3px 0", marginLeft: k === "h" ? -1 : 0 }}>{l}</button>
+                      ))}
+                    </div>
+                    <button className="link" style={{ fontSize: 12.5 }}
                       onClick={() => setCompact((m) => ({ ...m, [t.id]: !m[t.id] }))}>
                       {compact[t.id] ? "усі проєкти" : "лише заповнені"}
                     </button>
@@ -1987,14 +2018,26 @@ export default function TransferDesk() {
                                 </td>
                                 {cols.map((c) => (
                                   <td key={c} style={{ padding: 4 }}>
-                                    <input type="number" className="num" min="0" max="100" value={cellValue(e.id, c)} disabled={locked}
-                                      onChange={(ev) => setCell(e.id, c, ev.target.value)} aria-label={e.name + ", " + c}
-                                      style={{ textAlign: "center", padding: "7px 4px", background: locked ? "#F4F6FA" : C.surface,
-                                        border: "1px solid " + (cellValue(e.id, c) ? C.line : C.lineSoft) }} />
+                                    {inHours ? (
+                                      <>
+                                        <input type="number" className="num" min="0" max={MAX_HOURS} step="0.5" value={hoursValue(e.id, c)} disabled={locked}
+                                          onChange={(ev) => setHoursCell(e.id, c, ev.target.value)} aria-label={e.name + ", " + c + ", годин"}
+                                          style={{ textAlign: "center", padding: "7px 4px", background: locked ? "#F4F6FA" : C.surface,
+                                            border: "1px solid " + (hoursValue(e.id, c) !== "" ? C.line : C.lineSoft) }} />
+                                        <div className="num" style={{ textAlign: "center", fontSize: 11, color: C.muted, minHeight: 14 }}>{cellValue(e.id, c) !== "" ? cellValue(e.id, c) + "%" : ""}</div>
+                                      </>
+                                    ) : (
+                                      <input type="number" className="num" min="0" max="100" value={cellValue(e.id, c)} disabled={locked}
+                                        onChange={(ev) => setCell(e.id, c, ev.target.value)} aria-label={e.name + ", " + c}
+                                        style={{ textAlign: "center", padding: "7px 4px", background: locked ? "#F4F6FA" : C.surface,
+                                          border: "1px solid " + (cellValue(e.id, c) ? C.line : C.lineSoft) }} />
+                                    )}
                                   </td>
                                 ))}
                                 <td className="num" style={{ textAlign: "center", fontWeight: 600, color: tot === 100 ? C.signal : tot === 0 ? C.muted : C.stop }}>
+                                  {inHours && hoursIn(e.id).length > 0 && <div style={{ fontWeight: 400, color: C.ink2 }}>{round2(hoursTotal(hoursIn(e.id)))} год</div>}
                                   {tot ? round2(tot) + "%" : "—"}
+                                  {inHours && tot > 0 && !hasHours(entryOf(e.id, pKey)) && <div style={{ fontWeight: 400, fontSize: 11, color: C.warn }}>внесено у %</div>}
                                 </td>
                                 <td className="num" style={{ fontWeight: 600, color: tg ? C.ink : C.muted, wordBreak: "break-all", fontSize: 12.5 }}>{tg || "—"}</td>
                               </tr>
@@ -2003,7 +2046,9 @@ export default function TransferDesk() {
                           <tr>
                             <td style={{ position: "sticky", left: 0, background: "#F4F7FC", color: C.muted, fontWeight: 600 }}>Разом по продукту</td>
                             {cols.map((c) => (
-                              <td key={c} className="num" style={{ textAlign: "center", background: "#F4F7FC", color: C.ink2 }}>{colTotal(t.id, c) || "—"}</td>
+                              <td key={c} className="num" style={{ textAlign: "center", background: "#F4F7FC", color: C.ink2 }}>{inHours
+                                ? round2(members.reduce((a, e) => a + (Number(hoursValue(e.id, c)) || 0), 0)) + " год"
+                                : colTotal(t.id, c) || "—"}</td>
                             ))}
                             <td colSpan={2} style={{ background: "#F4F7FC" }} />
                           </tr>
