@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { findUser, verifyPassword, signToken, normalizeUsername } from "../../../lib/users";
+import { findUser, verifyPassword, signToken, normalizeUsername, roleOf } from "../../../lib/users";
 import { bump, peek, drop } from "../../../lib/store";
 
 export const dynamic = "force-dynamic";
@@ -36,6 +36,7 @@ export async function POST(request) {
     token: signToken(user),
     username: user.username,
     name: user.displayName,
-    isAdmin: !!user.isAdmin,
+    role: roleOf(user),
+    isAdmin: roleOf(user) === "admin",
   });
 }
