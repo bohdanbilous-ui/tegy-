@@ -1,6 +1,7 @@
 "use client";
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
+import { hoursToAlloc, hoursTotal, hoursText, hasHours, MAX_HOURS } from "../lib/hours";
 
 /* Робоче місце відповідального за відсотки: лише свої команди.
 Дані приходять з /api/team — сервер не віддає сюди ні чужих команд,
@@ -72,6 +73,7 @@ export default function TeamDesk({ user, token, onSignOut }) {
   const [saving, setSaving] = useState("ok");
   const [toast, setToast] = useState(null);
   const [compact, setCompact] = useState(false);
+  const [units, setUnits] = useState({}); // команда → "pct" | "h"; порожньо — за даними періоду
   const dirtyRef = useRef({});
   dirtyRef.current = dirty;
   const entriesRef = useRef([]);
@@ -136,7 +138,7 @@ export default function TeamDesk({ user, token, onSignOut }) {
         if (!m) return;
         const k = m.teamId + "|" + x.periodKey;
         const g = groups[k] || (groups[k] = { tid: m.teamId, key: x.periodKey, rows: [], sent: {} });
-        g.rows.push({ employeeId: x.employeeId, alloc: x.alloc.map((r) => ({ ...r })) });
+        g.rows.push({ employeeId: x.employeeId, alloc: x.alloc.map((r) => ({ ...r })), ...(hasHours(x) ? { hours: x.hours.map((h) => ({ ...h })) } : {}) });
         g.sent[x.id] = ver;
       });
       for (const g of Object.values(groups)) {
@@ -171,10 +173,17 @@ export default function TeamDesk({ user, token, onSignOut }) {
   const locked = !!sub;
 
   const allocOf = (list, empId, key) => ((list.find((x) => x.id === entryId(key, empId)) || {}).alloc) || [];
+  const entryIn = (empId, key) => entries.find((x) => x.id === entryId(key, empId));
+  const hoursIn = (empId, key) => (entryIn(empId, key) || {}).hours || [];
+  const rowOut = (list, empId, key) => { const x = list.find((y) => y.id === entryId(key, empId)) || {}; return { employeeId: empId, alloc: x.alloc || [], ...(hasHours(x) ? { hours: x.hours } : {}) }; };
   const allocIn = (empId, key) => allocOf(entries, empId, key);
   const cellValue = (empId, project) => { const r = allocIn(empId, pKey).find((x) => x.project === project); return r ? r.percent : ""; };
   const rowTotal = (empId) => sum(allocIn(empId, pKey));
   const filled = members.filter((m) => rowTotal(m.id) > 0).length;
+  // Години чи відсотки: як обрала людина, а якщо не обирала — як уже внесено в цьому періоді.
+  const unit = units[teamId] || (members.some((m) => hasHours(entryIn(m.id, pKey))) ? "h" : "pct");
+  const inHours = unit === "h";
+  const hoursValue = (empId, project) => { const h = hoursIn(empId, pKey).find((x) => x.project === project); return h ? h.hours : ""; };
 
   const cols = useMemo(() => {
     const all = data?.projects || [];
@@ -196,7 +205,27 @@ export default function TeamDesk({ user, token, onSignOut }) {
       // Порядок проєктів у рядку не змінюється — змінюється лише відсоток.
       const rows = (old ? old.alloc : []).map((r) => (r.project === project ? { ...r, percent: v } : r)).filter((r) => r.percent > 0);
       if (v > 0 && !rows.some((r) => r.project === project)) rows.push({ project, percent: v });
-      const next = { ...(old || {}), id, periodKey: pKey, employeeId: empId, alloc: rows };
+      const { hours: _drop, ...base } = old || {}; // внесли відсотки — години рядка більше не діють
+      const next = { ...base, id, periodKey: pKey, employeeId: empId, alloc: rows };
+      return old ? p.map((x) => (x.id === id ? next : x)) : [...p, next];
+    });
+    setDirty((d) => ({ ...d, [id]: ver }));
+  }
+
+  function setHours(empId, project, value) {
+    if (locked) return;
+    const n = value === "" ? 0 : Number(value);
+    if (!Number.isFinite(n)) return;
+    const v = Math.max(0, Math.min(MAX_HOURS, n));
+    const id = entryId(pKey, empId);
+    const ver = ++editSeq.current;
+    setEntries((p) => {
+      const old = p.find((x) => x.id === id);
+      // Нуль лишаємо, поки людина друкує (напр. «0.5»); порожня клітинка — рядок прибирається.
+      let hrs = (hasHours(old) ? old.hours : []).map((h) => (h.project === project ? { ...h, hours: v } : h));
+      if (value === "") hrs = hrs.filter((h) => h.project !== project);
+      else if (!hrs.some((h) => h.project === project)) hrs.push({ project, hours: v });
+      const next = { ...(old || {}), id, periodKey: pKey, employeeId: empId, hours: hrs, alloc: hoursToAlloc(hrs) };
       return old ? p.map((x) => (x.id === id ? next : x)) : [...p, next];
     });
     setDirty((d) => ({ ...d, [id]: ver }));
@@ -206,7 +235,7 @@ export default function TeamDesk({ user, token, onSignOut }) {
     if (locked) return;
     const prev = periodKey(shiftPeriod(period, -1));
     const rows = members.filter((m) => !rowTotal(m.id) && !dirtyRef.current[entryId(pKey, m.id)] && allocIn(m.id, prev).length)
-      .map((m) => ({ employeeId: m.id, alloc: allocIn(m.id, prev).map((r) => ({ ...r })) }));
+      .map((m) => rowOut(entries, m.id, prev));
     if (!rows.length) return setToast("Немає що переносити: попередній період порожній або цей уже заповнений.");
     const tid = teamId, key = pKey;
     await lock();
@@ -229,7 +258,7 @@ export default function TeamDesk({ user, token, onSignOut }) {
     await lock();
     try {
       setSaving("saving");
-      const rows = members.map((m) => ({ employeeId: m.id, alloc: allocOf(entriesRef.current, m.id, key) }));
+      const rows = members.map((m) => rowOut(entriesRef.current, m.id, key));
       const d = await put(tid, key, rows, true);
       apply(d);
       setSaving("ok");
@@ -248,15 +277,16 @@ export default function TeamDesk({ user, token, onSignOut }) {
       XLSX.utils.book_append_sheet(wb, ws, name);
     };
     add("Табель " + pKey, [
-      ["Співробітник", "Посада", ...(data.projects || []), "Разом, %", "Тег"],
-      ...members.map((m) => [m.name, m.position, ...(data.projects || []).map((p) => cellValue(m.id, p) || ""), rowTotal(m.id), tagOf(allocIn(m.id, pKey), codes)]),
-    ], [26, 24, ...(data.projects || []).map(() => 12), 10, 36]);
+      ["Співробітник", "Посада", ...(data.projects || []), "Разом, %", "Тег", "Години", "Годин разом"],
+      ...members.map((m) => [m.name, m.position, ...(data.projects || []).map((p) => cellValue(m.id, p) || ""), rowTotal(m.id), tagOf(allocIn(m.id, pKey), codes),
+        hoursText(hoursIn(m.id, pKey)), hoursIn(m.id, pKey).length ? hoursTotal(hoursIn(m.id, pKey)) : ""]),
+    ], [26, 24, ...(data.projects || []).map(() => 12), 10, 36, 40, 12]);
     add("Історія", [
-      ["Період", "Співробітник", "Тег", "Разом, %", "Оновив", "Коли"],
+      ["Період", "Співробітник", "Тег", "Разом, %", "Годин", "Оновив", "Коли"],
       ...entries.filter((x) => members.some((m) => m.id === x.employeeId))
         .sort((a, b) => b.periodKey.localeCompare(a.periodKey))
-        .map((x) => [x.periodKey, (members.find((m) => m.id === x.employeeId) || {}).name || "", tagOf(x.alloc, codes), sum(x.alloc), x.updatedBy || "", x.updatedAt ? fmtDT(x.updatedAt) : ""]),
-    ], [14, 26, 36, 10, 22, 18]);
+        .map((x) => [x.periodKey, (members.find((m) => m.id === x.employeeId) || {}).name || "", tagOf(x.alloc, codes), sum(x.alloc), hasHours(x) ? hoursTotal(x.hours) : "", x.updatedBy || "", x.updatedAt ? fmtDT(x.updatedAt) : ""]),
+    ], [14, 26, 36, 10, 10, 22, 18]);
     XLSX.writeFile(wb, "zvit-" + team.name.replace(/[^\p{L}\p{N}]+/gu, "-") + "-" + pKey + ".xlsx");
   }
 
@@ -335,6 +365,7 @@ export default function TeamDesk({ user, token, onSignOut }) {
               </div>
               <p style={{ margin: "10px 0 0", color: C.muted, fontSize: 12.5 }}>
                 Внесіть відсотки кожної людини за 01–15 і 16–кінець місяця так, щоб у рядку було рівно 100%, і натисніть «Подати період».
+                Можна вносити й години: перемкніть «години» — відсоток кожного проєкту порахується як його частка від усіх годин людини.
                 Зміни зберігаються автоматично.
               </p>
             </section>
@@ -352,7 +383,15 @@ export default function TeamDesk({ user, token, onSignOut }) {
                       подано · {sub.by}, {fmtDT(sub.at)}
                     </span>
                   )}
-                  <button className="link" style={{ marginLeft: "auto", fontSize: 12.5 }} onClick={() => setCompact((v) => !v)}>
+                  <div role="group" aria-label="Одиниці табеля" style={{ display: "flex", marginLeft: "auto" }}>
+                    {[["pct", "%"], ["h", "години"]].map(([k, l]) => (
+                      <button key={k} onClick={() => setUnits((u) => ({ ...u, [teamId]: k }))} aria-pressed={unit === k}
+                        style={{ cursor: "pointer", padding: "4px 12px", fontSize: 12.5, border: "1px solid " + (unit === k ? C.ink2 : C.line),
+                          background: unit === k ? C.ink : C.surface, color: unit === k ? "#fff" : C.ink2,
+                          borderRadius: k === "pct" ? "3px 0 0 3px" : "0 3px 3px 0", marginLeft: k === "h" ? -1 : 0 }}>{l}</button>
+                    ))}
+                  </div>
+                  <button className="link" style={{ fontSize: 12.5 }} onClick={() => setCompact((v) => !v)}>
                     {compact ? "усі проєкти" : "лише заповнені"}
                   </button>
                 </div>
@@ -390,13 +429,24 @@ export default function TeamDesk({ user, token, onSignOut }) {
                               </td>
                               {cols.map((c) => (
                                 <td key={c} style={{ padding: 4 }}>
-                                  <input type="number" className="num" min="0" max="100" value={cellValue(m.id, c)} disabled={locked}
-                                    onChange={(ev) => setCell(m.id, c, ev.target.value)} aria-label={m.name + ", " + c}
-                                    style={{ textAlign: "center", padding: "7px 4px", background: locked ? "#F4F6FA" : C.surface }} />
+                                  {inHours ? (
+                                    <>
+                                      <input type="number" className="num" min="0" max={MAX_HOURS} step="0.5" value={hoursValue(m.id, c)} disabled={locked}
+                                        onChange={(ev) => setHours(m.id, c, ev.target.value)} aria-label={m.name + ", " + c + ", годин"}
+                                        style={{ textAlign: "center", padding: "7px 4px", background: locked ? "#F4F6FA" : C.surface }} />
+                                      <div className="num" style={{ textAlign: "center", fontSize: 11, color: C.muted, minHeight: 14 }}>{cellValue(m.id, c) !== "" ? cellValue(m.id, c) + "%" : ""}</div>
+                                    </>
+                                  ) : (
+                                    <input type="number" className="num" min="0" max="100" value={cellValue(m.id, c)} disabled={locked}
+                                      onChange={(ev) => setCell(m.id, c, ev.target.value)} aria-label={m.name + ", " + c}
+                                      style={{ textAlign: "center", padding: "7px 4px", background: locked ? "#F4F6FA" : C.surface }} />
+                                  )}
                                 </td>
                               ))}
                               <td className="num" style={{ textAlign: "center", fontWeight: 600, color: Math.abs(tot - 100) < 0.01 ? C.signal : tot === 0 ? C.muted : C.stop }}>
+                                {inHours && hoursIn(m.id, pKey).length > 0 && <div style={{ fontWeight: 400, color: C.ink2 }}>{round2(hoursTotal(hoursIn(m.id, pKey)))} год</div>}
                                 {tot ? round2(tot) + "%" : "—"}
+                                {inHours && tot > 0 && !hasHours(entryIn(m.id, pKey)) && <div style={{ fontWeight: 400, fontSize: 11, color: C.warn }}>внесено у %</div>}
                               </td>
                               <td className="num" style={{ fontWeight: 600, color: tg ? C.ink : C.muted, wordBreak: "break-all", fontSize: 12.5 }}>{tg || "—"}</td>
                             </tr>
