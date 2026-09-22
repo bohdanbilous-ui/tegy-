@@ -1168,7 +1168,7 @@ export default function TransferDesk() {
     const mStart = finK1.slice(0, 7) + "-01", mMid = finK1.slice(0, 7) + "-15", mMid2 = finK1.slice(0, 7) + "-16", mEnd = lastDayISO(finMonth.y, finMonth.m);
     const inTeam = (e) => !!(e.teamId && teams.some((t) => t.id === e.teamId));
     const working = (e) => workingOn(e, mStart) && (!e.hiredOn || e.hiredOn <= mEnd);
-    // У фін. облік потрапляють лише ті, у кого в цьому місяці були зміни за переведеннями.
+    // У фін. облік потрапляють усі, хто є в табелі, і ті, у кого в цьому місяці були зміни за переведеннями.
     const people = employees.filter((e) => working(e) || filled(e.id, finK1) || filled(e.id, finK2));
     const trBy = new Map();
     transfers.forEach((t) => { if (!trBy.has(t.employeeId)) trBy.set(t.employeeId, []); trBy.get(t.employeeId).push(t); });
@@ -1196,7 +1196,7 @@ export default function TransferDesk() {
         expect: sheet && moves.length && allocSig(calc) !== allocSig(byMoves) ? tagOf(byMoves, codes) : "",
         moves: moves.map((t) => t.effectiveDate > mStart && t.effectiveDate <= mEnd ? t.effectiveDate : t.returnDate),
       };
-    }).filter((r) => r.moves.length).sort(byTeamName);
+    }).filter((r) => r.source === "табель" || r.moves.length).sort(byTeamName);
     const pending = teams.filter((t) => employees.some((e) => e.teamId === t.id && workingOn(e, finK1.slice(0, 7) + "-01")))
       .map((t) => ({ name: t.name, h1: !!(t.submitted || {})[finK1], h2: !!(t.submitted || {})[finK2] }));
     return { rows, pending };
@@ -2441,7 +2441,7 @@ export default function TransferDesk() {
               <p style={{ margin: "10px 0 0", color: C.muted, fontSize: 12.5 }}>
                 Дві половини зводяться пропорційно дням: 01–15 × 15/{finDays} + 16–{finDays} × {finDays - 15}/{finDays}, округлено до цілих.
                 Якщо одну половину не заповнено, береться інша. Клітинку можна змінити вручну — вона підсвітиться, розрахунок видно в підказці.
-                Показано лише людей, у яких у цьому місяці були зміни за переведеннями. Хто не в табелі — рахується за переведеннями: переведення з середини місяця дає частку пропорційно дням.
+                Показано всіх, хто є в табелі, і людей зі змінами за переведеннями в цьому місяці. Хто не в табелі — рахується за переведеннями: переведення з середини місяця дає частку пропорційно дням.
               </p>
               {!finClosed && finOpen.length > 0 && (
                 <p style={{ margin: "12px 0 0", background: C.warnSoft, border: "1px solid #E6CFA6", borderRadius: 3, padding: "10px 12px", color: C.warn }}>
@@ -2460,8 +2460,8 @@ export default function TransferDesk() {
               {finShown.length === 0 ? (
                 <p style={{ padding: "18px 20px", margin: 0, color: C.muted }}>
                   {finQ ? "Нікого не знайдено за «" + finQuery.trim() + "»."
-                    : finRows.length === 0 ? "У " + finLabel(finMonth) + " не було змін за переведеннями."
-                    : "У цій команді немає людей зі змінами за переведеннями в " + finLabel(finMonth) + "."}
+                    : finRows.length === 0 ? "За " + finLabel(finMonth) + " немає ні табеля, ні змін за переведеннями."
+                    : "У цій команді за " + finLabel(finMonth) + " нікого немає."}
                 </p>
               ) : (
                 <div style={{ overflowX: "auto" }}>
