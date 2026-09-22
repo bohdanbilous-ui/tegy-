@@ -2427,8 +2427,8 @@ export default function TransferDesk() {
                     закрито · {finClose.by}, {fmtDT(finClose.at)}
                   </span>
                 )}
-                <input type="search" value={finQuery} onChange={(e) => setFinQuery(e.target.value)} placeholder="Пошук за прізвищем"
-                  aria-label="Пошук за прізвищем" style={{ width: 200, marginLeft: "auto" }} />
+                <input type="text" value={finQuery} onChange={(e) => setFinQuery(e.target.value)} placeholder="Пошук за прізвищем"
+                  aria-label="Пошук за прізвищем" style={{ width: 220, marginLeft: "auto" }} />
                 <select value={finTeam} onChange={(e) => setFinTeam(e.target.value)} aria-label="Команда" style={{ width: "auto" }}>
                   <option value="all">Усі команди</option>
                   {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
