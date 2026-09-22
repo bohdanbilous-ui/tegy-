@@ -151,6 +151,33 @@ function allocAt(emp, transfers, dateISO) {
     .forEach((t) => { a = (!t.temporary || !t.returnDate || t.returnDate > dateISO) ? asAlloc(t.to) : asAlloc(t.from); });
   return a;
 }
+/* Розподіл за переведеннями на відрізок днів: кожен день важить однаково,
+   тож переведення з середини періоду дає частку пропорційно дням.
+   Дні до найму й після звільнення не рахуються. */
+const dayList = (from, to) => {
+  const out = [], d = new Date(from + "T00:00:00Z"), end = new Date(to + "T00:00:00Z");
+  for (; d <= end; d.setUTCDate(d.getUTCDate() + 1)) out.push(d.toISOString().slice(0, 10));
+  return out;
+};
+function roundAlloc(raw) {
+  const rows = [...raw].map(([project, v]) => ({ project, percent: Math.floor(v + 1e-9), rest: v - Math.floor(v + 1e-9) }));
+  let left = Math.round([...raw.values()].reduce((s, v) => s + v, 0)) - rows.reduce((s, r) => s + r.percent, 0);
+  rows.slice().sort((a, b) => b.rest - a.rest).forEach((r) => { if (left > 0) { r.percent++; left--; } });
+  return rows.filter((r) => r.percent > 0).map(({ project, percent }) => ({ project, percent }));
+}
+function blendAlloc(emp, transfers, from, to) {
+  const days = dayList(from, to).filter((d) => (!emp.hiredOn || d >= emp.hiredOn) && (!emp.leftOn || d <= emp.leftOn));
+  if (!days.length) return [];
+  const raw = new Map();
+  days.forEach((d) => asAlloc(allocAt(emp, transfers, d)).forEach((r) => raw.set(r.project, (raw.get(r.project) || 0) + (Number(r.percent) || 0) / days.length)));
+  return roundAlloc(raw);
+}
+// Переведення (або повернення з тимчасового), що змінюють розподіл усередині відрізка.
+const movesIn = (emp, transfers, from, to) => transfers.filter((t) => t.employeeId === emp.id && !t.cancelled &&
+  ((t.effectiveDate > from && t.effectiveDate <= to) || (t.temporary && t.returnDate && t.returnDate > from && t.returnDate <= to)));
+const lastDayISO = (y, m) => y + "-" + pad(m) + "-" + pad(lastDay(y, m));
+const periodEnd = (p) => p.half === 1 ? p.y + "-" + pad(p.m) + "-15" : lastDayISO(p.y, p.m);
+
 /* ─── погодження ──────────────────────────────────────────────────────────
    Переведення діє з дати незалежно від погодження — PM підтверджують уже
    доконане. Погодження збираються з проєктів, яких торкнулася зміна:
@@ -877,6 +904,16 @@ export default function TransferDesk() {
       return old ? p.map((x) => (x.id === id ? next : x)) : [...p, next];
     });
   }
+  // Підставити в табель розподіл за переведеннями (пропорційно дням періоду).
+  function applyMoves(empId, alloc) {
+    setEntries((p) => {
+      const id = entryId(empId, pKey), old = p.find((x) => x.id === id);
+      const next = { id, periodKey: pKey, employeeId: empId, alloc: alloc.map((r) => ({ ...r })), updatedAt: nowISO(), updatedBy: user ? user.name : "" };
+      return old ? p.map((x) => (x.id === id ? next : x)) : [...p, next];
+    });
+    const e = employees.find((x) => x.id === empId);
+    pushLog("підставив розподіл за переведеннями", (e ? e.name : empId) + ": " + allocText(alloc));
+  }
   function setHoursCell(empId, project, value) {
     const n = value === "" ? 0 : Number(value);
     if (!Number.isFinite(n)) return;
@@ -1127,10 +1164,22 @@ export default function TransferDesk() {
 
   const finData = useMemo(() => {
     const filled = (id, k) => allocIn(id, k).some((r) => r.percent > 0);
-    const people = employees.filter((e) => (e.teamId && teams.some((t) => t.id === e.teamId) && workingOn(e, finK1.slice(0, 7) + "-01")) || filled(e.id, finK1) || filled(e.id, finK2));
+    const mStart = finK1.slice(0, 7) + "-01", mMid = finK1.slice(0, 7) + "-15", mMid2 = finK1.slice(0, 7) + "-16", mEnd = lastDayISO(finMonth.y, finMonth.m);
+    const inTeam = (e) => !!(e.teamId && teams.some((t) => t.id === e.teamId));
+    const working = (e) => workingOn(e, mStart) && (!e.hiredOn || e.hiredOn <= mEnd);
+    // У фін. облік потрапляють усі, хто працював у місяці. Хто не в табелі — за довідником і переведеннями.
+    const people = employees.filter((e) => working(e) || filled(e.id, finK1) || filled(e.id, finK2));
+    const trBy = new Map();
+    transfers.forEach((t) => { if (!trBy.has(t.employeeId)) trBy.set(t.employeeId, []); trBy.get(t.employeeId).push(t); });
     const rows = people.map((e) => {
-      const a1 = asAlloc(allocIn(e.id, finK1)).filter((r) => r.percent > 0), a2 = asAlloc(allocIn(e.id, finK2)).filter((r) => r.percent > 0);
-      const calc = mergeHalves(a1, a2, finDays);
+      const tr = trBy.get(e.id) || [];
+      const sheet = inTeam(e) || filled(e.id, finK1) || filled(e.id, finK2);
+      const moves = movesIn(e, tr, mStart, mEnd);
+      const b1 = blendAlloc(e, tr, mStart, mMid), b2 = blendAlloc(e, tr, mMid2, mEnd);
+      const byMoves = blendAlloc(e, tr, mStart, mEnd);
+      const a1 = sheet ? asAlloc(allocIn(e.id, finK1)).filter((r) => r.percent > 0) : b1;
+      const a2 = sheet ? asAlloc(allocIn(e.id, finK2)).filter((r) => r.percent > 0) : b2;
+      const calc = sheet ? mergeHalves(a1, a2, finDays) : byMoves;
       const ov = fin.find((x) => x.id === "fo_" + finKey + "_" + e.id);
       const manual = !!(ov && ov.alloc);
       const alloc = manual ? asAlloc(ov.alloc).filter((r) => r.percent > 0) : calc;
@@ -1139,13 +1188,18 @@ export default function TransferDesk() {
         t1: tagOf(a1, codes), t2: tagOf(a2, codes), calc, calcTag: tagOf(calc, codes),
         alloc, tag: tagOf(alloc, codes), total: num2(alloc.reduce((s, r) => s + r.percent, 0)),
         manual, note: (ov && ov.note) || "", by: manual ? ov.updatedBy || "" : "", at: manual ? ov.updatedAt || "" : "",
-        miss: !a1.length && !a2.length ? "немає даних" : !a1.length ? "бракує 01–15" : !a2.length ? "бракує 16–" + finDays : "",
+        miss: !sheet ? (moves.length ? "без табеля · за переведеннями" : "без табеля · за довідником")
+          : !a1.length && !a2.length ? "немає даних" : !a1.length ? "бракує 01–15" : !a2.length ? "бракує 16–" + finDays : "",
+        source: sheet ? "табель" : moves.length ? "переведення" : "довідник",
+        // У табелі інші цифри, ніж дають переведення цього місяця, — підкажемо, який тег очікується.
+        expect: sheet && moves.length && allocSig(calc) !== allocSig(byMoves) ? tagOf(byMoves, codes) : "",
+        moves: moves.map((t) => t.effectiveDate > mStart && t.effectiveDate <= mEnd ? t.effectiveDate : t.returnDate),
       };
     }).sort(byTeamName);
     const pending = teams.filter((t) => employees.some((e) => e.teamId === t.id && workingOn(e, finK1.slice(0, 7) + "-01")))
       .map((t) => ({ name: t.name, h1: !!(t.submitted || {})[finK1], h2: !!(t.submitted || {})[finK2] }));
     return { rows, pending };
-  }, [employees, entries, teams, fin, codes, finKey]);
+  }, [employees, entries, teams, fin, codes, finKey, transfers]);
 
   // Закритий місяць показуємо зі збереженого знімка: цифри й теги не рухаються.
   const finRows = useMemo(() => {
@@ -1241,7 +1295,7 @@ export default function TransferDesk() {
       { name: "Місяць " + finKey, freeze: 1, cols: [26, 24, 24, 30, 30, 44, 34, 34, 10, 14, 30, 20],
         rows: [["Співробітник", "Посада", "Команда", "01–15", h2, "Розподіл за місяць", "Тег за місяць", "Тег за розрахунком", "Разом, %", "Джерело", "Примітка", "Скоригував"],
           ...rows.map((r) => [r.name, r.position, r.team, r.t1, r.t2, r.alloc.length ? allocText(r.alloc) : "", r.tag, r.calcTag,
-            r.total, r.manual ? "коригування" : r.miss || "розрахунок", r.note, r.manual ? r.by : ""])] },
+            r.total, r.manual ? "коригування" : r.miss || "розрахунок" + (r.expect ? "; за переведеннями " + r.expect : ""), r.note, r.manual ? r.by : ""])] },
       { name: "По проєктах", freeze: 1, cols: [30, 14, 12, 10],
         rows: [["Проєкт", "Код", "Ставок", "Людей"],
           ...Object.keys(byProj).sort((a, b) => a.localeCompare(b, "uk")).map((p) => [p, codes[p] || "", num2(byProj[p].fte), byProj[p].people])] },
@@ -2237,11 +2291,20 @@ export default function TransferDesk() {
                         <tbody>
                           {members.map((e) => {
                             const tot = rowTotal(e.id), a = personAlloc(e), tg = tagOf(a, codes);
+                            const mv = movesIn(e, transfers, periodStart(period), periodEnd(period));
+                            const want = mv.length ? blendAlloc(e, transfers, periodStart(period), periodEnd(period)) : [];
+                            const off = mv.length && allocSig(a) !== allocSig(want);
                             return (
                               <tr key={e.id}>
                                 <td style={{ position: "sticky", left: 0, background: C.surface }}>
                                   <button className="link" style={{ color: C.ink, textDecoration: "none", fontWeight: 600 }} onClick={() => setCardId(e.id)}>{e.name}</button>
                                   {e.position && <div style={{ color: C.muted, fontSize: 11.5 }}>{e.position}</div>}
+                                  {off && (
+                                    <div style={{ color: C.plan, fontSize: 11.5, marginTop: 2 }}>
+                                      переведення з {mv.map((t) => fmt(t.effectiveDate > periodStart(period) ? t.effectiveDate : t.returnDate).slice(0, 5)).join(", ")}: {tagOf(want, codes)}
+                                      {!locked && <button className="link" style={{ marginLeft: 6, fontSize: 11.5 }} onClick={() => applyMoves(e.id, want)}>підставити</button>}
+                                    </div>
+                                  )}
                                 </td>
                                 {cols.map((c) => (
                                   <td key={c} style={{ padding: 4 }}>
@@ -2364,6 +2427,7 @@ export default function TransferDesk() {
                 <select value={finTeam} onChange={(e) => setFinTeam(e.target.value)} aria-label="Команда" style={{ width: "auto", marginLeft: "auto" }}>
                   <option value="all">Усі команди</option>
                   {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                  <option value="">Без табеля</option>
                 </select>
                 <button onClick={exportFin} style={{ cursor: "pointer", padding: "8px 14px", borderRadius: 3, border: "1px solid " + C.line, background: C.surface, color: C.ink2 }}>
                   Звіт в Excel
@@ -2372,6 +2436,7 @@ export default function TransferDesk() {
               <p style={{ margin: "10px 0 0", color: C.muted, fontSize: 12.5 }}>
                 Дві половини зводяться пропорційно дням: 01–15 × 15/{finDays} + 16–{finDays} × {finDays - 15}/{finDays}, округлено до цілих.
                 Якщо одну половину не заповнено, береться інша. Клітинку можна змінити вручну — вона підсвітиться, розрахунок видно в підказці.
+                Люди без табеля (не в команді) рахуються за довідником і переведеннями: переведення з середини місяця дає частку пропорційно дням.
               </p>
               {!finClosed && finOpen.length > 0 && (
                 <p style={{ margin: "12px 0 0", background: C.warnSoft, border: "1px solid #E6CFA6", borderRadius: 3, padding: "10px 12px", color: C.warn }}>
@@ -2418,7 +2483,8 @@ export default function TransferDesk() {
                             <td style={{ position: "sticky", left: 0, background: C.surface }}>
                               <button className="link" style={{ color: C.ink, textDecoration: "none", fontWeight: 600 }} onClick={() => setCardId(r.id)}>{r.name}</button>
                               <div style={{ color: C.muted, fontSize: 11.5 }}>{r.team || "без команди"}</div>
-                              {r.miss && <div style={{ color: C.warn, fontSize: 11.5 }}>{r.miss}</div>}
+                              {r.miss && <div style={{ color: r.source === "табель" ? C.warn : C.muted, fontSize: 11.5 }}>{r.miss}</div>}
+                              {r.expect && <div style={{ color: C.plan, fontSize: 11.5 }} title={"Переведення: " + (r.moves || []).map(fmt).join(", ")}>за переведеннями: {r.expect}</div>}
                               {r.drift && <div style={{ color: C.warn, fontSize: 11.5 }}>табель змінено після закриття</div>}
                             </td>
                             <td className="num" style={{ fontSize: 12, color: r.t1 ? C.ink2 : C.muted, wordBreak: "break-all" }}>{r.t1 || "—"}</td>
