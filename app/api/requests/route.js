@@ -4,6 +4,7 @@ import { readState, readKey, writeKey } from "../../../lib/store";
 import { whoIs } from "../../../lib/auth";
 import { sameName } from "../../../lib/users";
 import { workingOn } from "../../../lib/people";
+import { orderProjects, isInactive } from "../../../lib/projects";
 
 export const dynamic = "force-dynamic";
 
@@ -50,7 +51,7 @@ export async function GET(request) {
   const uniq = (a) => [...new Set(a.filter(Boolean))].sort((x, y) => x.localeCompare(y, "uk"));
   return NextResponse.json({
     employees: uniq((state.employees || []).filter((e) => !tomb["e:" + e.id] && workingOn(e, today)).map((e) => e.name)),
-    projects: uniq((state.projects || []).filter((p) => !tomb["p:" + p])),
+    projects: orderProjects((state.projects || []).filter((p) => !tomb["p:" + p] && !isInactive(state.projectMeta, p)), state.projectMeta),
     reasons: uniq((state.reasons || []).filter((r) => !tomb["r:" + r])),
   });
 }
