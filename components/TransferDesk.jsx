@@ -5,6 +5,7 @@ import { mergeState, uniq } from "../lib/merge";
 import { hoursToAlloc, hoursTotal, hoursText, hasHours, MAX_HOURS } from "../lib/hours";
 import { api } from "../lib/api";
 import { workingOn } from "../lib/people";
+import { orderProjects, isInactive } from "../lib/projects";
 import TeamDesk from "./TeamDesk";
 
 /* Вхід через Google: NEXT_PUBLIC_GOOGLE_CLIENT_ID і NEXT_PUBLIC_ALLOWED_DOMAIN.
@@ -334,6 +335,12 @@ export default function TransferDesk() {
   const today = todayISO();
   const [ready, setReady] = useState(false);
   const [tab, setTab] = useState("form");
+  // Остання відкрита вкладка кожного розділу — щоб повертатися туди, де був.
+  const lastTab = useRef({});
+  useEffect(() => {
+    const sec = { form: "moves", journal: "moves", approve: "moves", req: "moves", teams: "sheet", fin: "sheet", report: "sheet", snap: "snap", lists: "lists" }[tab];
+    if (sec) lastTab.current[sec] = tab;
+  }, [tab]);
   const [user, setUser] = useState(null);
 
   const [employees, setEmployees] = useState(SEED_EMPLOYEES);
@@ -345,6 +352,7 @@ export default function TransferDesk() {
   const [log, setLog] = useState([]);
   const [pms, setPms] = useState({});
   const [codes, setCodes] = useState({});
+  const [projectMeta, setProjectMeta] = useState({});
   const [teams, setTeams] = useState(SEED_TEAMS);
   const [entries, setEntries] = useState([]);
   const [period, setPeriod] = useState(periodOf(todayISO()));
@@ -424,7 +432,7 @@ export default function TransferDesk() {
   const fileRef = useRef(null);
 
   /* ── синхронізація з сервером ── */
-  const snap = () => ({ employees, projects, partners, reasons, transfers, admins, log, deleted, pms, codes, teams, entries, fin, settings });
+  const snap = () => ({ employees, projects, partners, reasons, transfers, admins, log, deleted, pms, codes, projectMeta, teams, entries, fin, settings });
   stateRef.current = snap();
 
   function applyState(d) {
@@ -438,6 +446,7 @@ export default function TransferDesk() {
     setDeleted(d.deleted || {});
     setPms(d.pms || {});
     setCodes(d.codes || {});
+    setProjectMeta(d.projectMeta || {});
     setTeams((d.teams || []).length || d._view === "hrd" ? (d.teams || []) : SEED_TEAMS);
     setEntries(d.entries || []);
     setFin(d.fin || []);
@@ -517,7 +526,7 @@ export default function TransferDesk() {
     if (cur === lastSync.current) return;
     const id = setTimeout(() => syncNow(false), 700);
     return () => clearTimeout(id);
-  }, [employees, projects, partners, reasons, transfers, admins, log, deleted, pms, codes, teams, entries, fin, settings, ready, user]);
+  }, [employees, projects, partners, reasons, transfers, admins, log, deleted, pms, codes, projectMeta, teams, entries, fin, settings, ready, user]);
 
   useEffect(() => {
     if (!ready || !deskUser(user)) return;
@@ -620,8 +629,11 @@ export default function TransferDesk() {
     const s = new Set(projects);
     employees.forEach((e) => asAlloc(e.base).forEach((x) => x.project && s.add(x.project)));
     transfers.forEach((t) => [...asAlloc(t.from), ...asAlloc(t.to)].forEach((x) => x.project && s.add(x.project)));
-    return Array.from(s).filter(Boolean).sort((a, b) => a.localeCompare(b, "uk"));
-  }, [projects, employees, transfers]);
+    // Порядок — як у довіднику проєктів (його задає адміністратор стрілками).
+    return orderProjects([...projects, ...Array.from(s).filter((p) => !projects.includes(p)).sort((a, b) => a.localeCompare(b, "uk"))], projectMeta);
+  }, [projects, employees, transfers, projectMeta]);
+  const offProject = (p) => isInactive(projectMeta, p);
+  const activeProjects = allProjects.filter((p) => !offProject(p));
 
   const allReasons = useMemo(
     () => uniq([...reasons, ...transfers.map((t) => t.reason)]).sort((a, b) => a.localeCompare(b, "uk")),
@@ -668,6 +680,7 @@ export default function TransferDesk() {
     if (rows.some((r) => !r.project)) e.push("У кожному рядку розподілу має бути проєкт.");
     if (rows.some((r) => r.percent <= 0)) e.push("Відсоток на кожному проєкті має бути більшим за нуль.");
     if (new Set(rows.map((r) => r.project)).size !== rows.length) e.push("Один проєкт повторюється двічі — об'єднайте рядки.");
+    rows.filter((r) => offProject(r.project) && !currentAlloc.some((c) => c.project === r.project)).forEach((r) => e.push("Проєкт «" + r.project + "» неактивний — на нього вже не переводять."));
     if (total !== 100) e.push("Розподіл має давати рівно 100%, зараз " + round2(total) + "%.");
     if (rows.length && sameAlloc(rows, currentAlloc)) e.push("Новий розподіл збігається з поточним.");
     if (!effectiveDate) e.push("Вкажіть дату переведення.");
@@ -890,17 +903,18 @@ export default function TransferDesk() {
 
   /* Колонки табеля — це активні проєкти в порядку довідника.
      Нічого додавати руками не треба: з'явився проєкт — з'явилась колонка. */
-  const orderedProjects = useMemo(() => {
-    const extra = allProjects.filter((p) => !projects.includes(p));
-    return [...projects.filter(Boolean), ...extra];
-  }, [projects, allProjects]);
+  const orderedProjects = allProjects;
 
   function teamColumns(t) {
     const used = new Set();
     teamMembers(t.id).forEach((e) => entries.filter((x) => x.employeeId === e.id)
       .forEach((x) => (x.alloc || []).forEach((r) => r.percent > 0 && used.add(r.project))));
-    if (compact[t.id]) return orderedProjects.filter((p) => used.has(p));
-    return uniq([...orderedProjects, ...used]);
+    const now = new Set();
+    teamMembers(t.id).forEach((e) => allocIn(e.id, pKey).forEach((r) => r.percent > 0 && now.add(r.project)));
+    // За замовчуванням — лише проєкти, де в команди вже були відсотки. Нова команда бачить усі активні.
+    if ((compact[t.id] ?? true) && used.size) return uniq([...orderedProjects.filter((p) => used.has(p)), ...used]).filter((p) => !offProject(p) || now.has(p));
+    // Неактивний проєкт лишається колонкою, лише якщо в цьому періоді на ньому вже є відсотки.
+    return uniq([...orderedProjects.filter((p) => !offProject(p) || now.has(p)), ...used].filter((p) => !offProject(p) || now.has(p)));
   }
 
   function copyPrevPeriod(t) {
@@ -1320,7 +1334,16 @@ export default function TransferDesk() {
     const i = list.indexOf(name), j = i + dir;
     if (i < 0 || j < 0 || j >= list.length) return;
     list[i] = list[j]; list[j] = name;
-    setProjects(list);
+    const at = nowISO();
+    // Записуємо порядок усім проєктам разом — так він однозначний.
+    setProjectMeta((m) => { const n = { ...m }; list.forEach((p, k) => { n[p] = { ...(n[p] || {}), order: k, updatedAt: at }; }); return n; });
+  }
+  function toggleProjectActive(p) {
+    if (!isAdmin) return denied("змінювати проєкти може лише адміністратор");
+    const off = !offProject(p);
+    if (off && onProject(p) > 0 && !window.confirm("На проєкті «" + p + "» зараз " + onProject(p) + " " + plural(onProject(p), "людина", "людини", "людей") + ". Позначити неактивним? Їх треба буде перевести: новий розподіл на цей проєкт уже не вибрати.")) return;
+    setProjectMeta((m) => ({ ...m, [p]: { ...(m[p] || {}), inactive: off, updatedAt: nowISO() } }));
+    pushLog(off ? "позначив проєкт неактивним" : "повернув проєкт в активні", p);
   }
   function setCode(project, code) {
     setCodes((c) => ({ ...c, [project]: code.trim().toLowerCase() }));
@@ -1332,6 +1355,7 @@ export default function TransferDesk() {
     tomb("p:" + oldName); untomb("p:" + name);
     setPms((m) => { const n = { ...m }; if (n[oldName]) { n[name] = n[oldName]; delete n[oldName]; } return n; });
     setCodes((m) => { const n = { ...m }; if (n[oldName]) { n[name] = n[oldName]; delete n[oldName]; } return n; });
+    setProjectMeta((m) => { const at = nowISO(); const n = { ...m }; if (n[oldName]) { n[name] = { ...n[oldName], updatedAt: at }; n[oldName] = { ...n[oldName], order: undefined, updatedAt: at }; } return n; });
     setTeams((p) => p.map((t) => ({ ...t, alloc: (t.alloc || []).map((r) => (r.project === oldName ? { ...r, project: name } : r)) })));
     setTransfers((p) => p.map((t) => ({ ...t, approvals: (t.approvals || []).map((a) => (a.project === oldName ? { ...a, project: name } : a)) })));
     setEmployees((p) => p.map((e) => ({ ...e, updatedAt: nowISO(), base: typeof e.base === "string" ? (e.base === oldName ? name : e.base) : renameIn(e.base, oldName, name) })));
@@ -1591,18 +1615,53 @@ export default function TransferDesk() {
               <button className="link" onClick={signOut}>вийти</button>
             </div>
           </div>
-          <nav style={{ display: "flex", gap: 4, marginTop: 14, flexWrap: "wrap" }}>
-            {[["form", "Нове переведення"], ["journal", "Журнал"],
-              ["approve", "Погодження" + (myPending.length ? " · " + myPending.length : "")],
-              ["snap", "Зріз на дату"], ["teams", "Команди і теги"], ["fin", "Місяць · фін. облік"], ["report", "Звіт по місяцях"],
-              ["req", "Заявки" + (newRequests.length ? " · " + newRequests.length : "")], ["lists", "Довідник"]]
-              .filter(([k]) => isAdmin || !["approve", "lists", "fin", "req"].includes(k)).map(([k, l]) => (
-              <button key={k} onClick={() => setTab(k)} aria-current={tab === k}
-                style={{ cursor: "pointer", background: "none", border: "none", padding: "10px 14px",
-                  color: tab === k ? C.ink : C.muted, fontWeight: tab === k ? 600 : 400,
-                  borderBottom: "2px solid " + (tab === k ? C.signal : "transparent"), marginBottom: -1 }}>{l}</button>
-            ))}
-          </nav>
+          {(() => {
+            /* Навігація: 4 розділи, у кожному — свої вкладки. */
+            const allowed = (k) => isAdmin || !["approve", "lists", "fin", "req"].includes(k);
+            const TABS = {
+              form: "Нове переведення", journal: "Журнал",
+              approve: "Погодження" + (myPending.length ? " · " + myPending.length : ""),
+              req: "Заявки" + (newRequests.length ? " · " + newRequests.length : ""),
+              teams: "Табель команд", fin: "Місяць · фін. облік", report: "Звіт по місяцях",
+              snap: "Зріз на дату", lists: "Довідник",
+            };
+            const SECTIONS = [
+              { k: "moves", label: "Переведення", tabs: ["form", "journal", "approve", "req"], badge: (isAdmin ? myPending.length + newRequests.length : 0) },
+              { k: "sheet", label: "Табель", tabs: ["teams", "fin", "report"] },
+              { k: "snap", label: "Зріз на дату", tabs: ["snap"] },
+              { k: "lists", label: "Довідник", tabs: ["lists"] },
+            ].map((x) => ({ ...x, tabs: x.tabs.filter(allowed) })).filter((x) => x.tabs.length);
+            const cur = SECTIONS.find((x) => x.tabs.includes(tab)) || SECTIONS[0];
+            const scroll = { display: "flex", gap: 4, overflowX: "auto", flexWrap: "nowrap", scrollbarWidth: "none" };
+            return (
+              <>
+                <nav aria-label="Розділи" style={{ ...scroll, marginTop: 14 }}>
+                  {SECTIONS.map((x) => {
+                    const on = x === cur;
+                    return (
+                      <button key={x.k} onClick={() => setTab(lastTab.current[x.k] && x.tabs.includes(lastTab.current[x.k]) ? lastTab.current[x.k] : x.tabs[0])} aria-current={on}
+                        style={{ cursor: "pointer", background: "none", border: "none", padding: "10px 14px", whiteSpace: "nowrap", fontSize: 15,
+                          color: on ? C.ink : C.muted, fontWeight: on ? 600 : 400,
+                          borderBottom: "2px solid " + (on ? C.signal : "transparent"), marginBottom: -1 }}>
+                        {x.label}
+                        {x.badge ? <span style={{ marginLeft: 6, background: C.warnSoft, color: C.warn, borderRadius: 9, padding: "1px 7px", fontSize: 11.5, fontWeight: 600 }}>{x.badge}</span> : null}
+                      </button>
+                    );
+                  })}
+                </nav>
+                {cur.tabs.length > 1 && (
+                  <nav aria-label={cur.label} style={{ ...scroll, padding: "10px 0 12px", gap: 6 }}>
+                    {cur.tabs.map((k) => (
+                      <button key={k} onClick={() => setTab(k)} aria-current={tab === k}
+                        style={{ cursor: "pointer", whiteSpace: "nowrap", borderRadius: 16, padding: "6px 13px", fontSize: 13,
+                          border: "1px solid " + (tab === k ? C.ink : C.line), background: tab === k ? C.ink : C.surface,
+                          color: tab === k ? "#fff" : C.ink2, fontWeight: tab === k ? 600 : 400 }}>{TABS[k]}</button>
+                    ))}
+                  </nav>
+                )}
+              </>
+            );
+          })()}
         </div>
       </header>
 
@@ -1700,7 +1759,7 @@ export default function TransferDesk() {
                         {dist.length > 1 ? <button className="del" onClick={() => dropRow(i)} aria-label="Прибрати проєкт з розподілу">✕</button> : <span />}
                       </div>
                     ))}
-                    <datalist id="projects">{allProjects.map((p) => <option key={p} value={p} />)}</datalist>
+                    <datalist id="projects">{activeProjects.map((p) => <option key={p} value={p} />)}</datalist>
                     <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 2 }}>
                       <button className="ghost" onClick={addRow}>+ Ще один проєкт</button>
                       {dist.length > 1 && <button className="ghost" onClick={evenOut}>Порівну</button>}
@@ -2138,8 +2197,9 @@ export default function TransferDesk() {
                       ))}
                     </div>
                     <button className="link" style={{ fontSize: 12.5 }}
-                      onClick={() => setCompact((m) => ({ ...m, [t.id]: !m[t.id] }))}>
-                      {compact[t.id] ? "усі проєкти" : "лише заповнені"}
+                      title="Лише проєкти, на яких у команди вже були відсотки, або всі активні проєкти"
+                      onClick={() => setCompact((m) => ({ ...m, [t.id]: !(m[t.id] ?? true) }))}>
+                      {(compact[t.id] ?? true) ? "показати всі проєкти" : "лише проєкти команди"}
                     </button>
                     <button className="link" style={{ fontSize: 12.5 }} onClick={() => setShowHistory(hist ? null : t.id)}>
                       {hist ? "сховати історію" : "історія періодів"}
@@ -2328,7 +2388,7 @@ export default function TransferDesk() {
             <section style={{ ...card, overflow: "hidden" }}>
               {finShown.length === 0 ? (
                 <p style={{ padding: "18px 20px", margin: 0, color: C.muted }}>
-                  {finClosed ? "У закритому місяці немає людей цієї команди." : "За " + finLabel(finMonth) + " даних ще немає — спершу заповніть табель на вкладці «Команди і теги»."}
+                  {finClosed ? "У закритому місяці немає людей цієї команди." : "За " + finLabel(finMonth) + " даних ще немає — спершу заповніть табель у «Табель → Табель команд»."}
                 </p>
               ) : (
                 <div style={{ overflowX: "auto" }}>
@@ -2751,7 +2811,7 @@ export default function TransferDesk() {
                                     : <select value={asAlloc(e.base)[0]?.project || ""}
                                         onChange={(ev) => setEmployees((p) => p.map((x) => x.id === e.id ? { ...x, base: ev.target.value, updatedAt: nowISO() } : x))}
                                         aria-label="Початковий проєкт" style={{ padding: "7px 9px" }}>
-                                        {allProjects.map((pr) => <option key={pr} value={pr}>{pr}</option>)}
+                                        {allProjects.filter((pr) => !offProject(pr) || pr === (asAlloc(e.base)[0] || {}).project).map((pr) => <option key={pr} value={pr}>{pr}</option>)}
                                       </select>}
                                 </td>
                                 <td>{n ? <button className="link" onClick={() => setCardId(e.id)}>{n} — історія</button> : <span style={{ color: C.muted }}>—</span>}</td>
@@ -2788,7 +2848,9 @@ export default function TransferDesk() {
                 <div style={{ padding: "16px 18px", borderBottom: "1px solid " + C.lineSoft }}>
                   <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 20, fontWeight: 600 }}>Проєкти</h2>
                   <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>
-                    Порядок у таблиці задає порядок колонок у табелі команд. Код потрібен для тегів на кшталт cbx-47,cbx_pos-13,grp-40.
+                    Порядок у таблиці задає порядок колонок у табелі, фін. обліку, звітах і списках вибору. Неактивний проєкт
+                    зникає з вибору для нових переведень, з Google Форми й з колонок табеля, але лишається в історії та звітах.
+                    Код потрібен для тегів на кшталт cbx-47,cbx_pos-13,grp-40.
                   </p>
                   <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
                     <button className="ghost" onClick={suggestCodes}>Підказати коди за назвами</button>
@@ -2800,15 +2862,22 @@ export default function TransferDesk() {
                 ) : (
                   <div style={{ overflowX: "auto" }}>
                     <table>
-                      <thead><tr><th style={{ width: 58 }}>Порядок</th><th>Назва</th><th style={{ width: 130 }}>Код для тегів</th><th style={{ width: 190 }}>PM, який погоджує</th><th style={{ width: 80 }}>Людей</th><th style={{ width: 80 }}>Ставок</th><th style={{ width: 100 }}>Переведень</th><th style={{ width: 44 }} /></tr></thead>
+                      <thead><tr><th style={{ width: 86 }}>Порядок</th><th>Назва</th><th style={{ width: 96 }}>Активний</th><th style={{ width: 130 }}>Код для тегів</th><th style={{ width: 190 }}>PM, який погоджує</th><th style={{ width: 80 }}>Людей</th><th style={{ width: 80 }}>Ставок</th><th style={{ width: 100 }}>Переведень</th><th style={{ width: 44 }} /></tr></thead>
                       <tbody>
                         {orderedProjects.map((p, i) => (
-                          <tr key={p}>
+                          <tr key={p} style={offProject(p) ? { background: "#F4F6FA", color: C.muted } : undefined}>
                             <td style={{ whiteSpace: "nowrap" }}>
+                              <span className="num" style={{ display: "inline-block", width: 20, color: C.muted, fontSize: 12 }}>{i + 1}</span>
                               <button className="del" disabled={i === 0} onClick={() => moveProject(p, -1)} aria-label="Вище" style={{ opacity: i === 0 ? 0.3 : 1 }}>↑</button>
                               <button className="del" disabled={i === orderedProjects.length - 1} onClick={() => moveProject(p, 1)} aria-label="Нижче" style={{ opacity: i === orderedProjects.length - 1 ? 0.3 : 1 }}>↓</button>
                             </td>
                             <td><TextCell value={p} aria="Назва проєкту" onCommit={(v) => renameProject(p, v)} /></td>
+                            <td>
+                              <label style={{ display: "flex", gap: 6, alignItems: "center", cursor: isAdmin ? "pointer" : "default", fontSize: 12.5 }}>
+                                <input type="checkbox" checked={!offProject(p)} disabled={!isAdmin} onChange={() => toggleProjectActive(p)} style={{ width: "auto" }} aria-label={"Проєкт " + p + " активний"} />
+                                {offProject(p) ? "ні" : "так"}
+                              </label>
+                            </td>
                             <td>
                               <input type="text" list="codes" defaultValue={codes[p] || ""} placeholder="напр. cbx" aria-label={"Код проєкту " + p}
                                 onBlur={(e) => { const v = e.target.value.trim().toLowerCase(); if (v !== (codes[p] || "")) setCode(p, v); }}
@@ -2860,7 +2929,7 @@ export default function TransferDesk() {
                 {!isAdmin && <p style={{ color: C.muted, fontSize: 12.5, marginTop: 12 }}>Змінювати може адміністратор.</p>}
                 <h2 style={{ margin: "28px 0 0", fontFamily: SERIF, fontSize: 20, fontWeight: 600 }}>Команди і відповідальні</h2>
                 <p style={{ margin: "6px 0 0", color: C.ink2 }}>
-                  Відповідальний вносить відсотки залученості своєї команди. Люди прикріплюються на вкладці «Команди і теги»
+                  Відповідальний вносить відсотки залученості своєї команди. Люди прикріплюються у «Табель → Табель команд»
                   або колонкою «Команда» в таблиці співробітників. Ім'я відповідального має точно збігатися з іменем його
                   облікового запису у вкладці «Користувачі» — інакше він побачить порожню команду.
                   </p>
