@@ -1227,6 +1227,23 @@ export default function TransferDesk() {
     finShown.forEach((r) => [...r.alloc, ...(r.calc || [])].forEach((a) => a.percent > 0 && used.add(a.project)));
     return uniq([...orderedProjects.filter((p) => used.has(p)), ...used]);
   })();
+  // Навантаження на команди: сума часток людей команди по проєктах, у ставках (FTE).
+  const finLoad = (() => {
+    const used = new Set(), byTeam = new Map();
+    finRows.forEach((r) => {
+      if (!r.alloc.length) return;
+      const k = r.teamId || "";
+      if (!byTeam.has(k)) byTeam.set(k, { id: k, name: r.team || "Без команди", people: 0, fte: 0, proj: {} });
+      const t = byTeam.get(k);
+      t.people++;
+      r.alloc.forEach((a) => { if (a.percent > 0) { used.add(a.project); t.proj[a.project] = (t.proj[a.project] || 0) + a.percent / 100; t.fte += a.percent / 100; } });
+    });
+    const cols = uniq([...orderedProjects.filter((p) => used.has(p)), ...used]);
+    const list = [...byTeam.values()].sort((a, b) => (a.id ? 0 : 1) - (b.id ? 0 : 1) || a.name.localeCompare(b.name, "uk"));
+    const total = { people: list.reduce((x, t) => x + t.people, 0), fte: list.reduce((x, t) => x + t.fte, 0),
+      proj: Object.fromEntries(cols.map((c) => [c, list.reduce((x, t) => x + (t.proj[c] || 0), 0)])) };
+    return { cols, list, total };
+  })();
   const finBad = finData.rows.filter((r) => r.alloc.length && Math.abs(r.total - 100) > 0.01);
   const finOpen = finData.pending.filter((t) => !t.h1 || !t.h2);
   const finDrift = finRows.filter((r) => r.drift).length;
@@ -1302,6 +1319,10 @@ export default function TransferDesk() {
       { name: "По проєктах", freeze: 1, cols: [30, 14, 12, 10],
         rows: [["Проєкт", "Код", "Ставок", "Людей"],
           ...Object.keys(byProj).sort((a, b) => a.localeCompare(b, "uk")).map((p) => [p, codes[p] || "", num2(byProj[p].fte), byProj[p].people])] },
+      { name: "Навантаження команд", freeze: 1, cols: [28, 10, 12, ...finLoad.cols.map(() => 14)],
+        rows: [["Команда", "Людей", "FTE", ...finLoad.cols.map((c) => c + (codes[c] ? " (" + codes[c] + ")" : ""))],
+          ...finLoad.list.map((t) => [t.name, t.people, num2(t.fte), ...finLoad.cols.map((c) => (t.proj[c] ? num2(t.proj[c]) : ""))]),
+          ["Разом", finLoad.total.people, num2(finLoad.total.fte), ...finLoad.cols.map((c) => num2(finLoad.total.proj[c]))]] },
       { name: "По кодах", freeze: 1, cols: [16, 12],
         rows: [["Код", "Ставок"], ...Object.entries(byCode).sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, num2(v)])] },
       { name: "Коригування", freeze: 1, cols: [26, 24, 34, 34, 34, 20],
@@ -2562,6 +2583,57 @@ export default function TransferDesk() {
                 )}
               </div>
             </section>
+
+            {finLoad.list.length > 0 && (
+              <section style={{ ...card, overflow: "hidden" }}>
+                <div style={{ padding: "14px 20px", borderBottom: "1px solid " + C.lineSoft, display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
+                  <h3 style={{ margin: 0, fontFamily: SERIF, fontSize: 19, fontWeight: 600 }}>Навантаження на команди, FTE</h3>
+                  <span style={{ color: C.muted, fontSize: 12.5 }}>
+                    {finLabel(finMonth)} · 1 FTE — одна повна ставка: 40% людини на проєкті = 0,4 FTE. Рахується за всіма людьми місяця, без фільтра й пошуку.
+                  </span>
+                </div>
+                <div style={{ overflowX: "auto" }}>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th style={{ minWidth: 200, position: "sticky", left: 0, background: C.surface }}>Команда</th>
+                        <th style={{ minWidth: 64, textAlign: "center" }}>Людей</th>
+                        <th style={{ minWidth: 70, textAlign: "center" }}>FTE</th>
+                        {finLoad.cols.map((c) => (
+                          <th key={c} style={{ minWidth: 84, textAlign: "center" }}>
+                            <div>{c}</div>
+                            <div className="num" style={{ fontWeight: 400, color: codes[c] ? C.muted : C.stop }}>{codes[c] || "без коду"}</div>
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {finLoad.list.map((t) => (
+                        <tr key={t.id || "none"}>
+                          <td style={{ position: "sticky", left: 0, background: C.surface, fontWeight: 600, color: t.id ? C.ink : C.muted }}>{t.name}</td>
+                          <td className="num" style={{ textAlign: "center", color: C.ink2 }}>{t.people}</td>
+                          <td className="num" style={{ textAlign: "center", fontWeight: 600 }}>{num2(t.fte)}</td>
+                          {finLoad.cols.map((c) => (
+                            <td key={c} className="num" style={{ textAlign: "center", color: t.proj[c] ? C.ink2 : C.muted }}>
+                              {t.proj[c] ? num2(t.proj[c]) : "—"}
+                              {t.proj[c] > 0 && t.fte > 0 && <div style={{ fontSize: 11, color: C.muted }}>{Math.round((t.proj[c] / t.fte) * 100)}%</div>}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                      <tr>
+                        <td style={{ position: "sticky", left: 0, background: "#F4F7FC", color: C.muted, fontWeight: 600 }}>Разом</td>
+                        <td className="num" style={{ textAlign: "center", background: "#F4F7FC", color: C.ink2 }}>{finLoad.total.people}</td>
+                        <td className="num" style={{ textAlign: "center", background: "#F4F7FC", fontWeight: 600 }}>{num2(finLoad.total.fte)}</td>
+                        {finLoad.cols.map((c) => (
+                          <td key={c} className="num" style={{ textAlign: "center", background: "#F4F7FC", color: C.ink2 }}>{num2(finLoad.total.proj[c]) || "—"}</td>
+                        ))}
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            )}
           </div>
         )}
 
