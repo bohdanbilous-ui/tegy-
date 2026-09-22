@@ -3,6 +3,7 @@ import { readState, writeState } from "../../../lib/store";
 import { whoIs } from "../../../lib/auth";
 import { sameName } from "../../../lib/users";
 import { cleanHours, hoursToAlloc } from "../../../lib/hours";
+import { orderProjects, isInactive } from "../../../lib/projects";
 
 export const dynamic = "force-dynamic";
 
@@ -25,14 +26,18 @@ function sliceFor(state, me) {
   const memberIds = new Set(members.map((m) => m.id));
   const entries = (state.entries || []).filter((x) => memberIds.has(x.employeeId));
   // Колонки табеля: проєкти з довідника в його порядку + ті, що вже є в записах команди.
-  const projects = [...(state.projects || [])].filter((p) => p && !tomb["p:" + p]);
-  entries.forEach((x) => (x.alloc || []).forEach((r) => { if (r.project && !projects.includes(r.project)) projects.push(r.project); }));
+  // Неактивні проєкти лишаються колонкою лише там, де в них уже є відсотки.
+  const used = new Set();
+  entries.forEach((x) => (x.alloc || []).forEach((r) => { if (r.project && r.percent > 0) used.add(r.project); }));
+  const meta = state.projectMeta || {};
+  const projects = orderProjects([...(state.projects || []).filter((p) => p && !tomb["p:" + p]), ...used], meta)
+    .filter((p) => !isInactive(meta, p) || used.has(p));
   const codes = {};
   projects.forEach((p) => { if ((state.codes || {})[p]) codes[p] = state.codes[p]; });
   return {
     me: { name: me.name, username: me.username },
     teams: teams.map((t) => ({ id: t.id, name: t.name, owner: t.owner, submitted: t.submitted || {} })),
-    members, entries, projects, codes,
+    members, entries, projects, codes, inactive: projects.filter((p) => isInactive(meta, p)),
   };
 }
 
