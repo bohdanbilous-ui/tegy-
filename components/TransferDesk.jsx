@@ -353,6 +353,9 @@ export default function TransferDesk() {
   const [settings, setSettings] = useState({ approvalMode: "give" });
   const [deleted, setDeleted] = useState({});
   const [approveNote, setApproveNote] = useState({});
+  const [requests, setRequests] = useState([]);
+  const [formReady, setFormReady] = useState(true);
+  const [fromRequest, setFromRequest] = useState(null);
   const [syncAt, setSyncAt] = useState(null);
   const [syncState, setSyncState] = useState("ok");
   const [persistent, setPersistent] = useState(true);
@@ -517,6 +520,15 @@ export default function TransferDesk() {
     return () => clearInterval(id);
   }, [ready, user]);
 
+  // Заявки з Google Форми: при вході, щохвилини й при відкритті вкладки.
+  useEffect(() => {
+    if (!ready || roleOf(user) !== "admin") return;
+    loadRequests();
+    const id = setInterval(() => { if (!document.hidden) loadRequests(); }, 60000);
+    return () => clearInterval(id);
+  }, [ready, user]);
+  useEffect(() => { if (tab === "req") loadRequests(); }, [tab]);
+
   const tomb = (key) => setDeleted((d) => ({ ...d, [key]: nowISO() }));
   const untomb = (key) => setDeleted((d) => { const n = { ...d }; delete n[key]; return n; });
 
@@ -657,8 +669,10 @@ export default function TransferDesk() {
     if (!reason.trim()) e.push("Вкажіть підставу.");
     setErrors(e);
     if (e.length) return;
+    const newId = uid("t");
     setTransfers((p) => [{
-      id: uid("t"), employeeId: employee.id, employeeName: employee.name,
+      id: newId, employeeId: employee.id, employeeName: employee.name,
+      ...(fromRequest ? { requestId: fromRequest.id, requestedBy: fromRequest.requester || fromRequest.email } : {}),
       from: currentAlloc, to: rows, effectiveDate,
       temporary, returnDate: temporary ? returnDate : "",
       reason: reason.trim(), note: note.trim(),
@@ -674,7 +688,48 @@ export default function TransferDesk() {
     pushLog("створив переведення", employee.name + ": " + allocText(currentAlloc) + " → " + allocText(rows) + " з " + fmt(effectiveDate));
     setToast(employee.name + ": " + allocText(rows) + " з " + fmt(effectiveDate));
     resetDist(); setNote("");
+    if (fromRequest) { decideRequest(fromRequest, "done", newId); setFromRequest(null); }
   }
+
+  /* ─── заявки з Google Форми ─────────────────────────────────────────── */
+  async function callRequests(method, body) {
+    const res = await fetch("/api/requests", {
+      method, cache: "no-store",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + tokenRef.current },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "HTTP " + res.status);
+    return data;
+  }
+  async function loadRequests() {
+    if (!user || roleOf(user) !== "admin") return;
+    try { const d = await callRequests("GET"); setRequests(d.requests || []); setFormReady(d.formReady !== false); }
+    catch (e) { /* заявки не критичні — спробуємо наступного разу */ }
+  }
+  async function decideRequest(r, status, transferId, comment) {
+    try { const d = await callRequests("PATCH", { id: r.id, status, transferId: transferId || "", comment: comment || "" }); setRequests(d.requests || []); }
+    catch (e) { setToast("Не вдалося оновити заявку: " + e.message); }
+  }
+  function takeRequest(r) {
+    const emp = employees.find((e) => e.id === r.employeeId) || employees.find((e) => e.name.trim().toLowerCase() === r.employee.trim().toLowerCase());
+    if (emp) setSelectedId(emp.id);
+    setDist(r.alloc.map((x) => ({ project: x.project, percent: x.percent })));
+    setEffectiveDate(r.effectiveDate);
+    setTemporary(!!r.temporary);
+    setReturnDate(r.returnDate || "");
+    if (r.reason) setReason(r.reason);
+    setNote([r.note, "Заявка від " + (r.requester || r.email) + (r.email && r.requester ? " (" + r.email + ")" : "")].filter(Boolean).join(" · "));
+    setErrors(emp ? [] : ["«" + r.employee + "» немає в довіднику — оберіть людину у списку ліворуч."]);
+    setFromRequest(r);
+    setTab("form");
+  }
+  function rejectRequest(r) {
+    const why = window.prompt("Чому відхиляєте заявку щодо «" + r.employee + "»? (побачите лише ви)", "");
+    if (why === null) return;
+    decideRequest(r, "rejected", "", why);
+  }
+  const newRequests = requests.filter((r) => r.status === "new");
   function toggleCancel(t) {
     if (!canCancel(t)) return denied("скасувати чуже переведення");
     setTransfers((p) => p.map((x) => (x.id === t.id ? { ...x, cancelled: !x.cancelled, updatedAt: nowISO() } : x)));
@@ -1504,8 +1559,9 @@ export default function TransferDesk() {
           <nav style={{ display: "flex", gap: 4, marginTop: 14, flexWrap: "wrap" }}>
             {[["form", "Нове переведення"], ["journal", "Журнал"],
               ["approve", "Погодження" + (myPending.length ? " · " + myPending.length : "")],
-              ["snap", "Зріз на дату"], ["teams", "Команди і теги"], ["fin", "Місяць · фін. облік"], ["report", "Звіт по місяцях"], ["lists", "Довідник"]]
-              .filter(([k]) => isAdmin || !["approve", "lists", "fin"].includes(k)).map(([k, l]) => (
+              ["snap", "Зріз на дату"], ["teams", "Команди і теги"], ["fin", "Місяць · фін. облік"], ["report", "Звіт по місяцях"],
+              ["req", "Заявки" + (newRequests.length ? " · " + newRequests.length : "")], ["lists", "Довідник"]]
+              .filter(([k]) => isAdmin || !["approve", "lists", "fin", "req"].includes(k)).map(([k, l]) => (
               <button key={k} onClick={() => setTab(k)} aria-current={tab === k}
                 style={{ cursor: "pointer", background: "none", border: "none", padding: "10px 14px",
                   color: tab === k ? C.ink : C.muted, fontWeight: tab === k ? 600 : 400,
@@ -1562,6 +1618,15 @@ export default function TransferDesk() {
             </aside>
 
             <section style={{ ...card, padding: 22 }}>
+              {fromRequest && (
+                <div role="status" style={{ margin: "0 0 16px", background: C.signalSoft, border: "1px solid #A9D5D8", borderRadius: 3, padding: "10px 14px", color: C.ink2, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
+                  <span>
+                    Заповнено із заявки від <b>{fromRequest.requester || fromRequest.email}</b>, {fmtDT(fromRequest.submittedAt)}.
+                    Перевірте й натисніть «Створити переведення» — заявка позначиться як оброблена.
+                  </span>
+                  <button className="link" style={{ marginLeft: "auto" }} onClick={() => { setFromRequest(null); resetDist(); setNote(""); setErrors([]); }}>скасувати</button>
+                </div>
+              )}
               <div style={{ display: "flex", justifyContent: "space-between", gap: 14, flexWrap: "wrap", alignItems: "baseline" }}>
                 <div>
                   <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 22, fontWeight: 600 }}>{employee?.name || "Оберіть співробітника"}</h2>
@@ -1670,6 +1735,69 @@ export default function TransferDesk() {
             </section>
           </div>
         )}
+
+        {/* ── ЗАЯВКИ З GOOGLE ФОРМИ ── */}
+        {tab === "req" && isAdmin && (() => {
+          const done = requests.filter((r) => r.status !== "new").slice().sort((a, b) => (b.decidedAt || "").localeCompare(a.decidedAt || "")).slice(0, 30);
+          const fresh = newRequests.slice().sort((a, b) => (a.submittedAt || "").localeCompare(b.submittedAt || ""));
+          const reqCard = (r) => {
+            const emp = employees.find((e) => e.id === r.employeeId) || employees.find((e) => e.name.trim().toLowerCase() === r.employee.trim().toLowerCase());
+            const now = emp ? allocAt(emp, transfers, today) : [];
+            return (
+              <div key={r.id} style={{ borderTop: "1px solid " + C.lineSoft, padding: "16px 18px" }}>
+                <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
+                  <span style={{ fontWeight: 600, fontSize: 15 }}>{r.employee}</span>
+                  {emp ? <span style={{ color: C.muted }}>{allocText(now)}</span> : <span style={{ color: C.stop, fontSize: 12.5 }}>немає в довіднику</span>}
+                  <span style={{ color: C.line }}>→</span>
+                  <span style={{ fontWeight: 600 }}>{allocText(r.alloc)}</span>
+                  <span className="num" style={{ color: C.ink2 }}>з {fmt(r.effectiveDate)}</span>
+                  {r.temporary && <span style={{ color: C.ink2, fontSize: 12.5 }}>тимчасово до {r.returnDate ? fmt(r.returnDate) : "?"}</span>}
+                </div>
+                <div style={{ color: C.muted, fontSize: 12.5, marginTop: 4 }}>
+                  {r.reason || "підставу не вказано"} · подав(ла) {r.requester || "—"}{r.email ? " (" + r.email + ")" : ""}, {fmtDT(r.submittedAt)}
+                </div>
+                {r.note && <p style={{ margin: "8px 0 0", color: C.ink2, whiteSpace: "pre-wrap" }}>{r.note}</p>}
+                {r.status === "new" ? (
+                  <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+                    <button style={{ ...addBtn, background: C.signal }} onClick={() => takeRequest(r)}>Створити переведення</button>
+                    <button className="ghost" style={{ color: C.stop, borderColor: "#E2BCC6" }} onClick={() => rejectRequest(r)}>Відхилити</button>
+                  </div>
+                ) : (
+                  <div style={{ marginTop: 10, fontSize: 12.5, color: C.ink2, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
+                    <span style={{ background: r.status === "done" ? C.signalSoft : C.stopSoft, color: r.status === "done" ? C.signal : C.stop, borderRadius: 3, padding: "2px 8px", fontWeight: 600 }}>
+                      {r.status === "done" ? "створено переведення" : "відхилено"}
+                    </span>
+                    <span>{r.decidedBy}, {fmtDT(r.decidedAt)}{r.comment ? " · " + r.comment : ""}</span>
+                    <button className="link" style={{ fontSize: 12.5 }} onClick={() => decideRequest(r, "new")}>повернути в нові</button>
+                  </div>
+                )}
+              </div>
+            );
+          };
+          return (
+            <div style={{ display: "grid", gap: 20 }}>
+              <section style={{ ...card, padding: "16px 18px" }}>
+                <p style={{ margin: 0, color: C.ink2 }}>
+                  Сюди потрапляють заявки з Google Форми. «Створити переведення» підставляє дані у форму нового переведення —
+                  ви перевіряєте й зберігаєте, заявка позначається як оброблена. Автор заявки бачить лише саму форму.
+                </p>
+                {!formReady && (
+                  <p style={{ margin: "10px 0 0", background: C.warnSoft, border: "1px solid #E6CFA6", borderRadius: 3, padding: "10px 12px", color: C.warn }}>
+                    Форма ще не підключена: додайте у Vercel змінну FORM_SECRET (довгий випадковий рядок) і зробіть Redeploy.
+                  </p>
+                )}
+              </section>
+              {[{ k: "new", title: "Нові", items: fresh, empty: "Нових заявок немає." }, { k: "done", title: "Оброблені", items: done, empty: "Ще нічого не оброблено." }].map((b) => (
+                <section key={b.k} style={{ ...card, overflow: "hidden" }}>
+                  <div style={{ padding: "14px 18px" }}>
+                    <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 19, fontWeight: 600 }}>{b.title} <span className="num" style={{ color: C.muted, fontWeight: 400 }}>{b.items.length}</span></h2>
+                  </div>
+                  {b.items.length ? b.items.map(reqCard) : <p style={{ padding: "0 18px 18px", margin: 0, color: C.muted }}>{b.empty}</p>}
+                </section>
+              ))}
+            </div>
+          );
+        })()}
 
         {/* ── ЖУРНАЛ ── */}
         {tab === "journal" && (
