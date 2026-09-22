@@ -719,7 +719,7 @@ export default function TransferDesk() {
     setTemporary(!!r.temporary);
     setReturnDate(r.returnDate || "");
     if (r.reason) setReason(r.reason);
-    setNote([r.note, "Заявка від " + (r.requester || r.email) + (r.email && r.requester ? " (" + r.email + ")" : "")].filter(Boolean).join(" · "));
+    setNote([r.note, r.agreedWith ? "Погоджено з: " + r.agreedWith : "", "Заявка від " + (r.requester || r.email) + (r.email && r.requester ? " (" + r.email + ")" : "")].filter(Boolean).join(" · "));
     setErrors(emp ? [] : ["«" + r.employee + "» немає в довіднику — оберіть людину у списку ліворуч."]);
     setFromRequest(r);
     setTab("form");
@@ -1755,6 +1755,9 @@ export default function TransferDesk() {
                 </div>
                 <div style={{ color: C.muted, fontSize: 12.5, marginTop: 4 }}>
                   {r.reason || "підставу не вказано"} · подав(ла) {r.requester || "—"}{r.email ? " (" + r.email + ")" : ""}, {fmtDT(r.submittedAt)}
+                </div>
+                <div style={{ marginTop: 6, fontSize: 13, color: r.agreedWith ? C.ink2 : C.warn }}>
+                  Погоджено з: {r.agreedWith ? <b>{r.agreedWith}</b> : "не вказано"}
                 </div>
                 {r.note && <p style={{ margin: "8px 0 0", color: C.ink2, whiteSpace: "pre-wrap" }}>{r.note}</p>}
                 {r.status === "new" ? (
