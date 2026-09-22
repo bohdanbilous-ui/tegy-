@@ -7,7 +7,7 @@ import { cleanHours, hoursToAlloc } from "../../../lib/hours";
 
 export const dynamic = "force-dynamic";
 
-const EMPTY = { employees: [], projects: [], partners: [], reasons: [], transfers: [], admins: [], log: [], deleted: {}, pms: {}, codes: {}, teams: [], entries: [], fin: [], settings: { approvalMode: "give" } };
+const EMPTY = { employees: [], projects: [], partners: [], reasons: [], transfers: [], admins: [], log: [], deleted: {}, pms: {}, codes: {}, projectMeta: {}, teams: [], entries: [], fin: [], settings: { approvalMode: "give" } };
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const byId = (list) => new Map((list || []).map((x) => [x.id, x]));
 const newer = (a, b) => (a && a.updatedAt || "") > (b && b.updatedAt || "");
@@ -90,6 +90,7 @@ function guardHrd(stored, inc, me) {
   // Налаштування, PM і коди — лише адміністратор: беремо серверні значення.
   inc.pms = stored.pms || {};
   inc.codes = stored.codes || {};
+  inc.projectMeta = stored.projectMeta || {};
   inc.settings = stored.settings || {};
   inc.admins = stored.admins || [];
   inc.fin = stored.fin || [];
