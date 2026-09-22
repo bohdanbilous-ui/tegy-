@@ -7,6 +7,7 @@ import { api } from "../lib/api";
 import { workingOn } from "../lib/people";
 import { orderProjects, isInactive } from "../lib/projects";
 import TeamDesk from "./TeamDesk";
+import Reminders from "./Reminders";
 
 /* Вхід через Google: NEXT_PUBLIC_GOOGLE_CLIENT_ID і NEXT_PUBLIC_ALLOWED_DOMAIN.
    Токен перевіряється на сервері (app/api/state/route.js). */
@@ -338,7 +339,7 @@ export default function TransferDesk() {
   // Остання відкрита вкладка кожного розділу — щоб повертатися туди, де був.
   const lastTab = useRef({});
   useEffect(() => {
-    const sec = { form: "moves", journal: "moves", approve: "moves", req: "moves", teams: "sheet", fin: "sheet", report: "sheet", snap: "snap", lists: "lists" }[tab];
+    const sec = { form: "moves", journal: "moves", approve: "moves", req: "moves", teams: "sheet", remind: "sheet", fin: "sheet", report: "sheet", snap: "snap", lists: "lists" }[tab];
     if (sec) lastTab.current[sec] = tab;
   }, [tab]);
   const [user, setUser] = useState(null);
@@ -1617,17 +1618,17 @@ export default function TransferDesk() {
           </div>
           {(() => {
             /* Навігація: 4 розділи, у кожному — свої вкладки. */
-            const allowed = (k) => isAdmin || !["approve", "lists", "fin", "req"].includes(k);
+            const allowed = (k) => isAdmin || !["approve", "lists", "fin", "req", "remind"].includes(k);
             const TABS = {
               form: "Нове переведення", journal: "Журнал",
               approve: "Погодження" + (myPending.length ? " · " + myPending.length : ""),
               req: "Заявки" + (newRequests.length ? " · " + newRequests.length : ""),
-              teams: "Табель команд", fin: "Місяць · фін. облік", report: "Звіт по місяцях",
+              teams: "Табель команд", remind: "Нагадування", fin: "Місяць · фін. облік", report: "Звіт по місяцях",
               snap: "Зріз на дату", lists: "Довідник",
             };
             const SECTIONS = [
               { k: "moves", label: "Переведення", tabs: ["form", "journal", "approve", "req"], badge: (isAdmin ? myPending.length + newRequests.length : 0) },
-              { k: "sheet", label: "Табель", tabs: ["teams", "fin", "report"] },
+              { k: "sheet", label: "Табель", tabs: ["teams", "remind", "fin", "report"] },
               { k: "snap", label: "Зріз на дату", tabs: ["snap"] },
               { k: "lists", label: "Довідник", tabs: ["lists"] },
             ].map((x) => ({ ...x, tabs: x.tabs.filter(allowed) })).filter((x) => x.tabs.length);
@@ -2492,6 +2493,8 @@ export default function TransferDesk() {
         )}
 
         {/* ── ЗВІТ ── */}
+        {tab === "remind" && isAdmin && <Reminders getToken={() => tokenRef.current} onToast={setToast} />}
+
         {tab === "report" && (
           <div style={{ display: "grid", gap: 20 }}>
             <section style={{ ...card, padding: 22 }}>
