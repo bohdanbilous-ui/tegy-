@@ -3,6 +3,7 @@ import crypto from "crypto";
 import { readState, readKey, writeKey } from "../../../lib/store";
 import { whoIs } from "../../../lib/auth";
 import { sameName } from "../../../lib/users";
+import { workingOn } from "../../../lib/people";
 
 export const dynamic = "force-dynamic";
 
@@ -45,9 +46,10 @@ export async function GET(request) {
   if (!secretOk(request)) return denySecret();
   const state = (await readState()) || {};
   const tomb = state.deleted || {};
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Kyiv" }).format(new Date());
   const uniq = (a) => [...new Set(a.filter(Boolean))].sort((x, y) => x.localeCompare(y, "uk"));
   return NextResponse.json({
-    employees: uniq((state.employees || []).filter((e) => !tomb["e:" + e.id]).map((e) => e.name)),
+    employees: uniq((state.employees || []).filter((e) => !tomb["e:" + e.id] && workingOn(e, today)).map((e) => e.name)),
     projects: uniq((state.projects || []).filter((p) => !tomb["p:" + p])),
     reasons: uniq((state.reasons || []).filter((r) => !tomb["r:" + r])),
   });
