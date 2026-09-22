@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
 import { hoursToAlloc, hoursTotal, hoursText, hasHours, MAX_HOURS } from "../lib/hours";
+import { workingOn } from "../lib/people";
 
 /* Робоче місце відповідального за відсотки: лише свої команди.
 Дані приходять з /api/team — сервер не віддає сюди ні чужих команд,
@@ -167,7 +168,10 @@ export default function TeamDesk({ user, token, onSignOut }) {
   }, [dirty]);
 
   const team = (data?.teams || []).find((t) => t.id === teamId);
-  const members = (data?.members || []).filter((m) => m.teamId === teamId);
+  const teamAll = (data?.members || []).filter((m) => m.teamId === teamId);
+  // Звільнених до початку періоду в табелі вже немає; в історії — лишаються.
+  const pStart = period.y + "-" + pad(period.m) + "-" + (period.half === 1 ? "01" : "16");
+  const members = teamAll.filter((m) => workingOn(m, pStart));
   const codes = data?.codes || {};
   const sub = team ? (team.submitted || {})[pKey] : null;
   const locked = !!sub;
@@ -283,9 +287,9 @@ export default function TeamDesk({ user, token, onSignOut }) {
     ], [26, 24, ...(data.projects || []).map(() => 12), 10, 36, 40, 12]);
     add("Історія", [
       ["Період", "Співробітник", "Тег", "Разом, %", "Годин", "Оновив", "Коли"],
-      ...entries.filter((x) => members.some((m) => m.id === x.employeeId))
+      ...entries.filter((x) => teamAll.some((m) => m.id === x.employeeId))
         .sort((a, b) => b.periodKey.localeCompare(a.periodKey))
-        .map((x) => [x.periodKey, (members.find((m) => m.id === x.employeeId) || {}).name || "", tagOf(x.alloc, codes), sum(x.alloc), hasHours(x) ? hoursTotal(x.hours) : "", x.updatedBy || "", x.updatedAt ? fmtDT(x.updatedAt) : ""]),
+        .map((x) => [x.periodKey, (teamAll.find((m) => m.id === x.employeeId) || {}).name || "", tagOf(x.alloc, codes), sum(x.alloc), hasHours(x) ? hoursTotal(x.hours) : "", x.updatedBy || "", x.updatedAt ? fmtDT(x.updatedAt) : ""]),
     ], [14, 26, 36, 10, 10, 22, 18]);
     XLSX.writeFile(wb, "zvit-" + team.name.replace(/[^\p{L}\p{N}]+/gu, "-") + "-" + pKey + ".xlsx");
   }
