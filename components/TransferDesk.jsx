@@ -389,6 +389,7 @@ export default function TransferDesk() {
   const [finMonth, setFinMonth] = useState(() => { const d = todayISO(); return { y: +d.slice(0, 4), m: +d.slice(5, 7) }; });
   const [finTeam, setFinTeam] = useState("all");
   const [finQuery, setFinQuery] = useState("");
+  const [finPick, setFinPick] = useState({});
   const [settings, setSettings] = useState({ approvalMode: "give" });
   const [deleted, setDeleted] = useState({});
   const [approveNote, setApproveNote] = useState({});
@@ -1301,6 +1302,26 @@ export default function TransferDesk() {
     setFin((p) => p.map((x) => (x.id === "fc_" + finKey ? { ...x, closed: false, rows: [], reopenedBy: user.name, reopenedAt: stamp, updatedAt: stamp, updatedBy: user.name } : x)));
     pushLog("відкрив місяць для фін. обліку", finLabel(finMonth));
   }
+  /* Теги для таблиці зарплат: рядок на людину, відсотки по кодах і тег {prd:…}. */
+  const finPicked = finShown.filter((r) => finPick[r.id]);
+  function exportZp() {
+    const rows = finPicked.length ? finPicked : [];
+    if (!rows.length) return setToast("Позначте галочками, чиї теги вивантажити.");
+    downloadXlsx("tegy-zp-" + finKey + ".xlsx", [
+      { name: "Фіксовані теги", freeze: 1, cols: [34, ...CODES.map(() => 9), 34, 22],
+        rows: [["Співробітник", ...CODES.map((c) => c + " %"), "Тег (авто)", "Статус"],
+          ...rows.map((r) => {
+            const parts = tagParts(r.alloc, codes);
+            const sum = parts.reduce((x, t) => x + t.pct, 0);
+            const noCode = parts.filter((t) => !t.code).map((t) => t.project);
+            return [r.name, ...CODES.map((c) => { const t = parts.find((x) => x.code === c); return t ? t.pct : ""; }),
+              r.tag ? "{prd:" + r.tag + "}" : "",
+              noCode.length ? "без коду: " + noCode.join(", ") : sum === 100 ? "OK 100%" : "сума " + sum + "%"];
+          })] },
+    ]);
+    setToast("Вивантажено " + rows.length + " " + plural(rows.length, "рядок", "рядки", "рядків") + " для таблиці зарплат.");
+  }
+
   function exportFin() {
     const rows = finRows;
     const byProj = {};
@@ -2455,13 +2476,19 @@ export default function TransferDesk() {
                   {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                   <option value="">Без табеля</option>
                 </select>
+                <button onClick={exportZp} disabled={!finPicked.length}
+                  title="Обрані рядки у форматі аркуша «Фіксовані теги» таблиці зарплат"
+                  style={{ cursor: finPicked.length ? "pointer" : "default", padding: "8px 14px", borderRadius: 3,
+                    border: "1px solid " + (finPicked.length ? C.line : C.lineSoft), background: C.surface, color: finPicked.length ? C.ink2 : C.muted }}>
+                  Теги для ЗП{finPicked.length ? " (" + finPicked.length + ")" : ""}
+                </button>
                 <button onClick={exportFin} style={{ cursor: "pointer", padding: "8px 14px", borderRadius: 3, border: "1px solid " + C.line, background: C.surface, color: C.ink2 }}>
                   Звіт в Excel
                 </button>
               </div>
               <p style={{ margin: "10px 0 0", color: C.muted, fontSize: 12.5 }}>
                 Дві половини зводяться пропорційно дням: 01–15 × 15/{finDays} + 16–{finDays} × {finDays - 15}/{finDays}, округлено до цілих.
-                Якщо одну половину не заповнено, береться інша. Клітинку можна змінити вручну — вона підсвітиться, розрахунок видно в підказці.
+                Якщо одну половину не заповнено, береться інша. Клітинку можна змінити вручну — вона підсвітиться, розрахунок видно в підказці. Галочками можна позначити людей і вивантажити їхні теги для таблиці зарплат.
                 Показано всіх, хто є в табелі, і людей зі змінами за переведеннями в цьому місяці. Хто не в табелі — рахується за переведеннями: переведення з середини місяця дає частку пропорційно дням.
               </p>
               {!finClosed && finOpen.length > 0 && (
@@ -2489,6 +2516,11 @@ export default function TransferDesk() {
                   <table>
                     <thead>
                       <tr>
+                        <th style={{ width: 34, textAlign: "center" }}>
+                          <input type="checkbox" aria-label="Позначити всіх" style={{ width: "auto", cursor: "pointer" }}
+                            checked={finShown.length > 0 && finPicked.length === finShown.length}
+                            onChange={(ev) => setFinPick(ev.target.checked ? Object.fromEntries(finShown.map((r) => [r.id, true])) : {})} />
+                        </th>
                         <th style={{ minWidth: 200, position: "sticky", left: 0, background: C.surface }}>ПІБ</th>
                         <th style={{ minWidth: 140 }}>01–15</th>
                         <th style={{ minWidth: 140 }}>16–{finDays}</th>
@@ -2508,6 +2540,10 @@ export default function TransferDesk() {
                         const val = (list, c) => { const x = (list || []).find((y) => y.project === c); return x ? x.percent : ""; };
                         return (
                           <tr key={r.id}>
+                            <td style={{ textAlign: "center" }}>
+                              <input type="checkbox" aria-label={"Позначити " + r.name} style={{ width: "auto", cursor: "pointer" }}
+                                checked={!!finPick[r.id]} onChange={(ev) => setFinPick((m) => ({ ...m, [r.id]: ev.target.checked }))} />
+                            </td>
                             <td style={{ position: "sticky", left: 0, background: C.surface }}>
                               <button className="link" style={{ color: C.ink, textDecoration: "none", fontWeight: 600 }} onClick={() => setCardId(r.id)}>{r.name}</button>
                               <div style={{ color: C.muted, fontSize: 11.5 }}>{r.team || "без команди"}</div>
@@ -2550,6 +2586,7 @@ export default function TransferDesk() {
                         );
                       })}
                       <tr>
+                        <td style={{ background: "#F4F7FC" }} />
                         <td style={{ position: "sticky", left: 0, background: "#F4F7FC", color: C.muted, fontWeight: 600 }}>Разом, ставок</td>
                         <td colSpan={2} style={{ background: "#F4F7FC" }} />
                         {finCols.map((c) => (
