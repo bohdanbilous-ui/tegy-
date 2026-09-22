@@ -388,6 +388,7 @@ export default function TransferDesk() {
   const [fin, setFin] = useState([]);
   const [finMonth, setFinMonth] = useState(() => { const d = todayISO(); return { y: +d.slice(0, 4), m: +d.slice(5, 7) }; });
   const [finTeam, setFinTeam] = useState("all");
+  const [finQuery, setFinQuery] = useState("");
   const [settings, setSettings] = useState({ approvalMode: "give" });
   const [deleted, setDeleted] = useState({});
   const [approveNote, setApproveNote] = useState({});
@@ -1167,7 +1168,7 @@ export default function TransferDesk() {
     const mStart = finK1.slice(0, 7) + "-01", mMid = finK1.slice(0, 7) + "-15", mMid2 = finK1.slice(0, 7) + "-16", mEnd = lastDayISO(finMonth.y, finMonth.m);
     const inTeam = (e) => !!(e.teamId && teams.some((t) => t.id === e.teamId));
     const working = (e) => workingOn(e, mStart) && (!e.hiredOn || e.hiredOn <= mEnd);
-    // У фін. облік потрапляють усі, хто працював у місяці. Хто не в табелі — за довідником і переведеннями.
+    // У фін. облік потрапляють лише ті, у кого в цьому місяці були зміни за переведеннями.
     const people = employees.filter((e) => working(e) || filled(e.id, finK1) || filled(e.id, finK2));
     const trBy = new Map();
     transfers.forEach((t) => { if (!trBy.has(t.employeeId)) trBy.set(t.employeeId, []); trBy.get(t.employeeId).push(t); });
@@ -1195,7 +1196,7 @@ export default function TransferDesk() {
         expect: sheet && moves.length && allocSig(calc) !== allocSig(byMoves) ? tagOf(byMoves, codes) : "",
         moves: moves.map((t) => t.effectiveDate > mStart && t.effectiveDate <= mEnd ? t.effectiveDate : t.returnDate),
       };
-    }).sort(byTeamName);
+    }).filter((r) => r.moves.length).sort(byTeamName);
     const pending = teams.filter((t) => employees.some((e) => e.teamId === t.id && workingOn(e, finK1.slice(0, 7) + "-01")))
       .map((t) => ({ name: t.name, h1: !!(t.submitted || {})[finK1], h2: !!(t.submitted || {})[finK2] }));
     return { rows, pending };
@@ -1205,7 +1206,7 @@ export default function TransferDesk() {
   const finRows = useMemo(() => {
     if (!finClosed) return finData.rows;
     const live = new Map(finData.rows.map((r) => [r.id, r]));
-    return (finClose.rows || []).map((s) => {
+    return (finClose.rows || []).filter((s) => live.has(s.e)).map((s) => {
       const l = live.get(s.e), e = employees.find((x) => x.id === s.e);
       const alloc = (s.a || []).map(([project, percent]) => ({ project, percent: Number(percent) || 0 }));
       const teamId = (e && e.teamId) || "";
@@ -1218,7 +1219,9 @@ export default function TransferDesk() {
       };
     }).sort(byTeamName);
   }, [finClosed, finClose, finData, employees, teams, codes]);
-  const finShown = finRows.filter((r) => finTeam === "all" || r.teamId === finTeam);
+  const finQ = finQuery.trim().toLocaleLowerCase("uk");
+  const finShown = finRows.filter((r) => (finTeam === "all" || r.teamId === finTeam) &&
+    (!finQ || String(r.name || "").toLocaleLowerCase("uk").includes(finQ)));
   const finCols = (() => {
     const used = new Set();
     finShown.forEach((r) => [...r.alloc, ...(r.calc || [])].forEach((a) => a.percent > 0 && used.add(a.project)));
@@ -2424,7 +2427,9 @@ export default function TransferDesk() {
                     закрито · {finClose.by}, {fmtDT(finClose.at)}
                   </span>
                 )}
-                <select value={finTeam} onChange={(e) => setFinTeam(e.target.value)} aria-label="Команда" style={{ width: "auto", marginLeft: "auto" }}>
+                <input type="search" value={finQuery} onChange={(e) => setFinQuery(e.target.value)} placeholder="Пошук за прізвищем"
+                  aria-label="Пошук за прізвищем" style={{ width: 200, marginLeft: "auto" }} />
+                <select value={finTeam} onChange={(e) => setFinTeam(e.target.value)} aria-label="Команда" style={{ width: "auto" }}>
                   <option value="all">Усі команди</option>
                   {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                   <option value="">Без табеля</option>
@@ -2436,7 +2441,7 @@ export default function TransferDesk() {
               <p style={{ margin: "10px 0 0", color: C.muted, fontSize: 12.5 }}>
                 Дві половини зводяться пропорційно дням: 01–15 × 15/{finDays} + 16–{finDays} × {finDays - 15}/{finDays}, округлено до цілих.
                 Якщо одну половину не заповнено, береться інша. Клітинку можна змінити вручну — вона підсвітиться, розрахунок видно в підказці.
-                Люди без табеля (не в команді) рахуються за довідником і переведеннями: переведення з середини місяця дає частку пропорційно дням.
+                Показано лише людей, у яких у цьому місяці були зміни за переведеннями. Хто не в табелі — рахується за переведеннями: переведення з середини місяця дає частку пропорційно дням.
               </p>
               {!finClosed && finOpen.length > 0 && (
                 <p style={{ margin: "12px 0 0", background: C.warnSoft, border: "1px solid #E6CFA6", borderRadius: 3, padding: "10px 12px", color: C.warn }}>
@@ -2454,7 +2459,9 @@ export default function TransferDesk() {
             <section style={{ ...card, overflow: "hidden" }}>
               {finShown.length === 0 ? (
                 <p style={{ padding: "18px 20px", margin: 0, color: C.muted }}>
-                  {finClosed ? "У закритому місяці немає людей цієї команди." : "За " + finLabel(finMonth) + " даних ще немає — спершу заповніть табель у «Табель → Табель команд»."}
+                  {finQ ? "Нікого не знайдено за «" + finQuery.trim() + "»."
+                    : finRows.length === 0 ? "У " + finLabel(finMonth) + " не було змін за переведеннями."
+                    : "У цій команді немає людей зі змінами за переведеннями в " + finLabel(finMonth) + "."}
                 </p>
               ) : (
                 <div style={{ overflowX: "auto" }}>
