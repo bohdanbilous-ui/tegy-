@@ -4,6 +4,7 @@ import * as XLSX from "xlsx";
 import { mergeState, uniq } from "../lib/merge";
 import { hoursToAlloc, hoursTotal, hoursText, hasHours, MAX_HOURS } from "../lib/hours";
 import { api } from "../lib/api";
+import { workingOn } from "../lib/people";
 import TeamDesk from "./TeamDesk";
 
 /* Вхід через Google: NEXT_PUBLIC_GOOGLE_CLIENT_ID і NEXT_PUBLIC_ALLOWED_DOMAIN.
@@ -101,6 +102,7 @@ const periodOf = (isoDate) => {
   return { y, m, half: d <= 15 ? 1 : 2 };
 };
 const periodLabel = (p) => MONTHS[p.m - 1] + " " + p.y + ", " + (p.half === 1 ? "01–15" : "16–" + lastDay(p.y, p.m));
+const periodStart = (p) => p.y + "-" + pad(p.m) + "-" + (p.half === 1 ? "01" : "16");
 const shiftPeriod = (p, n) => {
   let idx = p.y * 24 + (p.m - 1) * 2 + (p.half - 1) + n;
   const y = Math.floor(idx / 24); idx -= y * 24;
@@ -413,6 +415,9 @@ export default function TransferDesk() {
   const [empQuery, setEmpQuery] = useState("");
   const [empSort, setEmpSort] = useState({ key: "name", dir: "asc" });
   const [empShown, setEmpShown] = useState(60);
+  const [showGone, setShowGone] = useState(false);
+  const [pf, setPf] = useState(null);
+  const [pfBusy, setPfBusy] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [preview, setPreview] = useState(null);
   const [importError, setImportError] = useState("");
@@ -528,6 +533,7 @@ export default function TransferDesk() {
     return () => clearInterval(id);
   }, [ready, user]);
   useEffect(() => { if (tab === "req") loadRequests(); }, [tab]);
+  useEffect(() => { if (tab === "lists" && book === "emp") loadPf(); }, [tab, book, user]);
 
   const tomb = (key) => setDeleted((d) => ({ ...d, [key]: nowISO() }));
   const untomb = (key) => setDeleted((d) => { const n = { ...d }; delete n[key]; return n; });
@@ -605,7 +611,7 @@ export default function TransferDesk() {
   const canDelete = () => isAdmin;
   const denied = (what) => { setToast("Немає прав: " + what + ". Попросіть автора запису або адміністратора."); };
 
-  const employee = employees.find((e) => e.id === selectedId) || employees[0];
+  const employee = employees.find((e) => e.id === selectedId) || employees.find((e) => workingOn(e, today)) || employees[0];
   const currentAlloc = employee ? allocAt(employee, transfers, today) : [];
   const nameOf = (t) => employees.find((e) => e.id === t.employeeId)?.name || t.employeeName || "—";
   const cardEmp = employees.find((e) => e.id === cardId);
@@ -627,11 +633,14 @@ export default function TransferDesk() {
     const val = (e) => empSort.key === "position" ? (e.position || "")
       : empSort.key === "project" ? allocText(allocAt(e, transfers, today)) : e.name;
     return employees
-      .filter((e) => !q || (e.name + " " + (e.position || "") + " " + (e.extId || "") + " " + allocText(allocAt(e, transfers, today))).toLowerCase().includes(q))
+      .filter((e) => showGone || workingOn(e, today))
+      .filter((e) => !q || (e.name + " " + (e.position || "") + " " + (e.department || "") + " " + (e.extId || "") + " " + allocText(allocAt(e, transfers, today))).toLowerCase().includes(q))
       .sort((a, b) => val(a).localeCompare(val(b), "uk") * (empSort.dir === "asc" ? 1 : -1));
-  }, [employees, transfers, empQuery, empSort, today]);
+  }, [employees, transfers, empQuery, empSort, today, showGone]);
+  const goneCount = employees.filter((e) => !workingOn(e, today)).length;
 
   const roster = employees.filter((e) => {
+    if (!workingOn(e, today)) return false; // звільнених не переводимо
     const q = query.trim().toLowerCase();
     return !q || (e.name + " " + (e.position || "") + " " + (e.extId || "") + " " + allocText(allocAt(e, transfers, today))).toLowerCase().includes(q);
   });
@@ -706,6 +715,31 @@ export default function TransferDesk() {
     if (!user || roleOf(user) !== "admin") return;
     try { const d = await callRequests("GET"); setRequests(d.requests || []); setFormReady(d.formReady !== false); }
     catch (e) { /* заявки не критичні — спробуємо наступного разу */ }
+  }
+  async function callPf(method) {
+    const res = await fetch("/api/peopleforce", { method, headers: { Authorization: "Bearer " + tokenRef.current }, cache: "no-store" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok && !data.last) throw new Error(data.error || "HTTP " + res.status);
+    return data;
+  }
+  async function loadPf() {
+    if (!user || roleOf(user) !== "admin") return;
+    try { setPf(await callPf("GET")); } catch (e) { /* не критично */ }
+  }
+  async function syncPf() {
+    setPfBusy(true);
+    try {
+      const d = await callPf("POST");
+      setPf(d);
+      if (d.last && d.last.ok) {
+        const sentAt = Date.now();
+        const remote = await api.get({ token: tokenRef.current, name: user.name });
+        learnClock(remote._now, sentAt);
+        adoptServer(remote);
+        setToast("PeopleForce: нових " + d.last.counts.added + ", оновлено " + d.last.counts.updated + ", звільнено " + d.last.counts.left + ".");
+      } else setToast("PeopleForce: " + ((d.last && d.last.error) || "не вдалося"));
+    } catch (e) { setToast("PeopleForce: " + e.message); }
+    finally { setPfBusy(false); }
   }
   async function decideRequest(r, status, transferId, comment) {
     try { const d = await callRequests("PATCH", { id: r.id, status, transferId: transferId || "", comment: comment || "" }); setRequests(d.requests || []); }
@@ -807,7 +841,8 @@ export default function TransferDesk() {
     setEditId(null); setEdit(null);
   }
 
-  const teamMembers = (id) => employees.filter((e) => e.teamId === id);
+  // У табелі періоду — лише ті, хто ще працював на його початок.
+  const teamMembers = (id) => employees.filter((e) => e.teamId === id && workingOn(e, periodStart(period)));
   const pKey = periodKey(period.y, period.m, period.half);
   const entryId = (empId, key) => "en_" + key + "_" + empId;
   const entryOf = (empId, key) => entries.find((x) => x.id === entryId(empId, key));
@@ -1077,7 +1112,7 @@ export default function TransferDesk() {
 
   const finData = useMemo(() => {
     const filled = (id, k) => allocIn(id, k).some((r) => r.percent > 0);
-    const people = employees.filter((e) => (e.teamId && teams.some((t) => t.id === e.teamId)) || filled(e.id, finK1) || filled(e.id, finK2));
+    const people = employees.filter((e) => (e.teamId && teams.some((t) => t.id === e.teamId) && workingOn(e, finK1.slice(0, 7) + "-01")) || filled(e.id, finK1) || filled(e.id, finK2));
     const rows = people.map((e) => {
       const a1 = asAlloc(allocIn(e.id, finK1)).filter((r) => r.percent > 0), a2 = asAlloc(allocIn(e.id, finK2)).filter((r) => r.percent > 0);
       const calc = mergeHalves(a1, a2, finDays);
@@ -1092,7 +1127,7 @@ export default function TransferDesk() {
         miss: !a1.length && !a2.length ? "немає даних" : !a1.length ? "бракує 01–15" : !a2.length ? "бракує 16–" + finDays : "",
       };
     }).sort(byTeamName);
-    const pending = teams.filter((t) => employees.some((e) => e.teamId === t.id))
+    const pending = teams.filter((t) => employees.some((e) => e.teamId === t.id && workingOn(e, finK1.slice(0, 7) + "-01")))
       .map((t) => ({ name: t.name, h1: !!(t.submitted || {})[finK1], h2: !!(t.submitted || {})[finK2] }));
     return { rows, pending };
   }, [employees, entries, teams, fin, codes, finKey]);
@@ -2524,6 +2559,50 @@ export default function TransferDesk() {
 
             {book === "emp" && (
               <>
+                {isAdmin && (
+                  <section style={{ ...card, padding: 20 }}>
+                    <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+                      <div style={{ flex: "1 1 320px" }}>
+                        <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 19, fontWeight: 600 }}>PeopleForce</h2>
+                        <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>
+                          Щоранку підтягує нових людей, звільнення, посади й відділи. Розподіл по проєктах, команди й переведення не змінюються.
+                          Звільнені зникають зі списків, але їхня історія лишається.
+                        </p>
+                      </div>
+                      {pf && pf.configured && (
+                        <button style={addBtn} disabled={pfBusy} onClick={syncPf}>{pfBusy ? "Синхронізую…" : "Синхронізувати зараз"}</button>
+                      )}
+                    </div>
+                    {pf && !pf.configured && (
+                      <p style={{ margin: "12px 0 0", background: C.warnSoft, borderRadius: 3, padding: "10px 14px", color: C.ink2, fontSize: 12.5 }}>
+                        Не налаштовано. Додайте у Vercel змінну <b>PEOPLEFORCE_API_KEY</b> (PeopleForce → Налаштування → API) і <b>CRON_SECRET</b> для щоденного запуску, потім Redeploy.
+                      </p>
+                    )}
+                    {pf && pf.configured && !pf.cron && (
+                      <p style={{ margin: "12px 0 0", color: C.warn, fontSize: 12.5 }}>Щоденний запуск вимкнено: додайте у Vercel змінну CRON_SECRET (від 16 символів). Кнопка працює й без неї.</p>
+                    )}
+                    {pf && pf.last && (
+                      <div style={{ marginTop: 12, fontSize: 12.5 }}>
+                        {pf.last.ok ? (
+                          <>
+                            <p style={{ margin: 0, color: C.ink2 }}>
+                              Востаннє: {fmtDT(pf.last.at)} ({pf.last.by}) — у PeopleForce {pf.last.total}; нових {pf.last.counts.added}, оновлено {pf.last.counts.updated}, звільнено {pf.last.counts.left}
+                              {pf.last.counts.returned ? ", повернулися " + pf.last.counts.returned : ""}.
+                            </p>
+                            {[["Нові", pf.last.added], ["Звільнення", pf.last.left], ["Повернулися", pf.last.returned], ["Зміни", pf.last.updated]].filter(([, a]) => a && a.length).map(([l, a]) => (
+                              <details key={l} style={{ marginTop: 6 }}>
+                                <summary style={{ cursor: "pointer", color: C.ink2 }}>{l}: {a.length}</summary>
+                                <ul style={{ margin: "6px 0 0", paddingLeft: 18, color: C.muted }}>{a.map((x, i) => <li key={i}>{x}</li>)}</ul>
+                              </details>
+                            ))}
+                          </>
+                        ) : (
+                          <p role="alert" style={{ margin: 0, color: C.stop }}>Остання спроба {fmtDT(pf.last.at)} не вдалася: {pf.last.error}</p>
+                        )}
+                      </div>
+                    )}
+                  </section>
+                )}
                 <section
                   onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
                   onDragLeave={() => setDragOver(false)}
@@ -2605,6 +2684,12 @@ export default function TransferDesk() {
                         ? employees.length + " " + plural(employees.length, "запис", "записи", "записів")
                         : "знайдено " + bookRows.length + " з " + employees.length}
                     </span>
+                    {goneCount > 0 && (
+                      <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12.5, color: C.ink2, cursor: "pointer" }}>
+                        <input type="checkbox" checked={showGone} onChange={(e) => setShowGone(e.target.checked)} style={{ width: "auto" }} />
+                        показати звільнених ({goneCount})
+                      </label>
+                    )}
                   </div>
 
                   {employees.length === 0 ? (
@@ -2635,13 +2720,23 @@ export default function TransferDesk() {
                             return (
                               <tr key={e.id}>
                                 <td className="num" style={{ color: C.muted }}>{i + 1}</td>
-                                <td>
-                                  <TextCell value={e.name} aria="Ім'я співробітника" onCommit={(v) => renameEmployee(e.id, v)} />
-                                  {e.extId && <div style={{ color: C.muted, fontSize: 11.5, marginTop: 2 }}>ід {e.extId}</div>}
+                                <td style={e.leftOn && e.leftOn < today ? { opacity: 0.6 } : undefined}>
+                                  {e.pfId
+                                    ? <div style={{ fontWeight: 600 }} title="Ім'я береться з PeopleForce">{e.name}</div>
+                                    : <TextCell value={e.name} aria="Ім'я співробітника" onCommit={(v) => renameEmployee(e.id, v)} />}
+                                  <div style={{ color: C.muted, fontSize: 11.5, marginTop: 2 }}>
+                                    {[e.extId && "ід " + e.extId, e.pfId && "PeopleForce"].filter(Boolean).join(" · ")}
+                                  </div>
+                                  {e.leftOn && (
+                                    <div style={{ color: C.stop, fontSize: 11.5, marginTop: 2 }}>{e.leftOn < today ? "звільнено" : "звільняється"} {fmt(e.leftOn)}</div>
+                                  )}
                                 </td>
                                 <td>
-                                  <TextCell value={e.position || ""} placeholder="—" aria="Посада"
-                                    onCommit={(v) => setEmployees((p) => p.map((x) => x.id === e.id ? { ...x, position: v, updatedAt: nowISO() } : x))} />
+                                  {e.pfId
+                                    ? <div title="Посада береться з PeopleForce">{e.position || "—"}</div>
+                                    : <TextCell value={e.position || ""} placeholder="—" aria="Посада"
+                                        onCommit={(v) => setEmployees((p) => p.map((x) => x.id === e.id ? { ...x, position: v, updatedAt: nowISO() } : x))} />}
+                                  {(e.department || e.division) && <div style={{ color: C.muted, fontSize: 11.5, marginTop: 2 }}>{[e.division, e.department].filter(Boolean).join(" / ")}</div>}
                                 </td>
                                 <td>{allocText(allocAt(e, transfers, today))}</td>
                                 <td>
