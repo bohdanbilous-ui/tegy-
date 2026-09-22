@@ -73,7 +73,7 @@ export default function TeamDesk({ user, token, onSignOut }) {
   const [dirty, setDirty] = useState({});
   const [saving, setSaving] = useState("ok");
   const [toast, setToast] = useState(null);
-  const [compact, setCompact] = useState(false);
+  const [compact, setCompact] = useState(true); // лише проєкти, де в команди вже були відсотки
   const [units, setUnits] = useState({}); // команда → "pct" | "h"; порожньо — за даними періоду
   const dirtyRef = useRef({});
   dirtyRef.current = dirty;
@@ -190,12 +190,15 @@ export default function TeamDesk({ user, token, onSignOut }) {
   const hoursValue = (empId, project) => { const h = hoursIn(empId, pKey).find((x) => x.project === project); return h ? h.hours : ""; };
 
   const cols = useMemo(() => {
-    const all = data?.projects || [];
+    // Неактивний проєкт показуємо, лише якщо в цьому періоді на ньому вже є відсотки.
+    const off = new Set(data?.inactive || []);
+    const all = (data?.projects || []).filter((p) => !off.has(p) || members.some((m) => ((entryIn(m.id, pKey) || {}).alloc || []).some((r) => r.project === p && r.percent > 0)));
     if (!compact) return all;
     const used = new Set();
     members.forEach((m) => entries.filter((x) => x.employeeId === m.id).forEach((x) => (x.alloc || []).forEach((r) => r.percent > 0 && used.add(r.project))));
-    return all.filter((p) => used.has(p));
-  }, [data, compact, members, entries]);
+    // Нова команда без жодних відсотків бачить усі активні проєкти.
+    return used.size ? all.filter((p) => used.has(p)) : all;
+  }, [data, compact, members, entries, pKey]);
 
   function setCell(empId, project, value) {
     if (locked) return;
@@ -396,7 +399,7 @@ export default function TeamDesk({ user, token, onSignOut }) {
                     ))}
                   </div>
                   <button className="link" style={{ fontSize: 12.5 }} onClick={() => setCompact((v) => !v)}>
-                    {compact ? "усі проєкти" : "лише заповнені"}
+                    {compact ? "показати всі проєкти" : "лише проєкти команди"}
                   </button>
                 </div>
 
@@ -404,7 +407,7 @@ export default function TeamDesk({ user, token, onSignOut }) {
                   <p style={{ padding: "18px 20px", margin: 0, color: C.muted }}>До команди ще нікого не прикріплено — людей додає адміністратор.</p>
                 ) : cols.length === 0 ? (
                   <p style={{ padding: "18px 20px", margin: 0, color: C.muted }}>
-                    {compact ? "У цьому періоді ще нічого не заповнено." : "Проєктів ще немає — їх додає адміністратор у довіднику."}
+                    Проєктів ще немає — їх додає адміністратор у довіднику.
                   </p>
                 ) : (
                   <div style={{ overflowX: "auto" }}>
