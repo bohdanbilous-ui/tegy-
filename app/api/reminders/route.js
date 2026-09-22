@@ -7,6 +7,9 @@ import { KEY, normalize, kyivNow, periodOfDate, shiftPeriod, periodLabel, period
 export const dynamic = "force-dynamic";
 
 /* Нагадування про табель.
+   Ключ завдання можна передати заголовком x-reminder-key або параметром ?key= (інструмент
+   завдання вміє лише GET без заголовків), тому звіт про надсилання теж є GET-варіант:
+   ?key=…&ack=<jobId>&sent=Ім'я|Ім'я&failed=Ім'я:причина|…
    Адміністратор (Bearer): GET — налаштування, стан періоду, історія; PUT — текст, Slack ID, автонагадування;
      POST { periodKey, names } — поставити надсилання в чергу.
    Заплановане завдання (x-reminder-key = REMINDER_SECRET): GET ?pending=1 — що надіслати зараз
@@ -16,10 +19,11 @@ const URL_APP = process.env.APP_URL || "https://tegy-rho.vercel.app";
 const RE_SLACK = /^[UW][A-Z0-9]{6,15}$/;
 const nowISO = () => new Date().toISOString();
 
+const givenKey = (request) => request.headers.get("x-reminder-key") || new URL(request.url).searchParams.get("key") || "";
 function keyOk(request) {
   const secret = process.env.REMINDER_SECRET || "";
   if (secret.length < 16) return false;
-  const a = crypto.createHash("sha256").update(request.headers.get("x-reminder-key") || "").digest();
+  const a = crypto.createHash("sha256").update(givenKey(request)).digest();
   const b = crypto.createHash("sha256").update(secret).digest();
   return crypto.timingSafeEqual(a, b);
 }
@@ -40,8 +44,15 @@ const view = (cfg, state, key) => ({
 const validKey = (k) => /^\d{4}-\d{2}-H[12]$/.test(String(k || ""));
 
 export async function GET(request) {
-  if (request.headers.get("x-reminder-key")) {
+  if (givenKey(request)) {
     if (!keyOk(request)) return NextResponse.json({ error: "Невірний ключ нагадувань." }, { status: 403 });
+    const q = new URL(request.url).searchParams;
+    if (q.get("ack")) {
+      const split = (v) => String(v || "").split("|").map((x) => x.trim()).filter(Boolean);
+      const results = [...split(q.get("sent")).map((name) => ({ name, ok: true })),
+        ...split(q.get("failed")).map((x) => { const i = x.indexOf(":"); return { name: i < 0 ? x : x.slice(0, i), ok: false, error: i < 0 ? "" : x.slice(i + 1) }; })];
+      return ack(q.get("ack"), results);
+    }
     const cfg = await load();
     const state = (await readState()) || {};
     const now = kyivNow();
@@ -74,6 +85,17 @@ export async function GET(request) {
   return NextResponse.json({ ...view(await load(), (await readState()) || {}, key), current: today, previous: shiftPeriod(today, -1) });
 }
 
+async function ack(jobId, results) {
+  const cfg = await load();
+  const j = cfg.jobs.find((x) => x.id === jobId);
+  if (!j) return NextResponse.json({ error: "Немає такого надсилання." }, { status: 404 });
+  j.status = "sent"; j.sentAt = nowISO();
+  j.results = (Array.isArray(results) ? results : []).slice(0, 50)
+    .map((r) => ({ name: String(r?.name || "").slice(0, 120), ok: !!r?.ok, error: String(r?.error || "").slice(0, 200) }));
+  await writeKey(KEY, cfg);
+  return NextResponse.json({ ok: true, jobId, recorded: j.results.length });
+}
+
 export async function PUT(request) {
   const g = await admin(request);
   if (g.res) return g.res;
@@ -104,16 +126,9 @@ export async function PUT(request) {
 export async function POST(request) {
   let body; try { body = await request.json(); } catch (e) { return NextResponse.json({ error: "Некоректний запит." }, { status: 400 }); }
   // Звіт запланованого завдання про надсилання.
-  if (request.headers.get("x-reminder-key")) {
+  if (givenKey(request)) {
     if (!keyOk(request)) return NextResponse.json({ error: "Невірний ключ нагадувань." }, { status: 403 });
-    const cfg = await load();
-    const j = cfg.jobs.find((x) => x.id === body?.jobId);
-    if (!j) return NextResponse.json({ error: "Немає такого надсилання." }, { status: 404 });
-    j.status = "sent"; j.sentAt = nowISO();
-    j.results = (Array.isArray(body?.results) ? body.results : []).slice(0, 50)
-      .map((r) => ({ name: String(r?.name || "").slice(0, 120), ok: !!r?.ok, error: String(r?.error || "").slice(0, 200) }));
-    await writeKey(KEY, cfg);
-    return NextResponse.json({ ok: true });
+    return ack(body?.jobId, body?.results);
   }
   const g = await admin(request);
   if (g.res) return g.res;
