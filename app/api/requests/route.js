@@ -85,7 +85,7 @@ export async function POST(request) {
     requester: str(body?.requester, 120), email: str(body?.email, 160),
     employee, employeeId: emp ? emp.id : "",
     alloc, effectiveDate, temporary, returnDate: temporary && DATE_RE.test(returnDate) ? returnDate : "",
-    reason: str(body?.reason, 200), note: str(body?.note, 2000),
+    reason: str(body?.reason, 200), agreedWith: str(body?.agreedWith, 500), note: str(body?.note, 2000),
     submittedAt: str(body?.submittedAt, 40) || stamp, createdAt: stamp,
   });
   await writeKey(KEY, list.slice(-500));
