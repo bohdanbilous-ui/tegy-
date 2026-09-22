@@ -95,6 +95,44 @@ function tagParts(alloc, codes) {
 }
 const tagOf = (alloc, codes) => tagParts(alloc, codes).map((r) => (r.code || "?") + "-" + r.pct).join(",");
 
+/* Звіт годин із таск-менеджера: люди в ньому записані латиницею, тож імена з
+   довідника перекладаємо тією ж таблицею і порівнюємо набір слів, а не рядок. */
+const TRANSLIT = [["зг", "zgh"], ["ж", "zh"], ["х", "kh"], ["ц", "ts"], ["ч", "ch"], ["ш", "sh"], ["щ", "shch"],
+  ["ю", "iu"], ["я", "ia"], ["є", "ie"], ["ї", "i"], ["й", "i"], ["ь", ""], ["'", ""], ["’", ""], ["ґ", "g"],
+  ["а", "a"], ["б", "b"], ["в", "v"], ["г", "h"], ["д", "d"], ["е", "e"], ["з", "z"], ["и", "y"], ["і", "i"],
+  ["к", "k"], ["л", "l"], ["м", "m"], ["н", "n"], ["о", "o"], ["п", "p"], ["р", "r"], ["с", "s"], ["т", "t"],
+  ["у", "u"], ["ф", "f"]];
+function translit(s) {
+  const t = String(s || "").toLowerCase();
+  let out = "";
+  for (let i = 0; i < t.length;) {
+    const hit = TRANSLIT.find(([k]) => t.startsWith(k, i));
+    if (hit) { out += hit[1]; i += hit[0].length; } else { out += t[i]; i++; }
+  }
+  return out;
+}
+const nameWords = (s) => translit(s).replace(/[^a-z]+/g, " ").trim().split(" ").filter((w) => w.length > 1).sort();
+function editDist(a, b) {
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[b.length];
+}
+/* Транслітерація буває різна: Ihor / Igor, Illia / Ilya, Oleh / Oleg. Зводимо слово
+   до спільного вигляду (g→h, y→i, здвоєні літери в одну) і лишаємо запас на одну літеру. */
+const canon = (w) => w.replace(/g/g, "h").replace(/y/g, "i").replace(/(.)\1+/g, "$1");
+function closeWord(a, b) {
+  const x = canon(a), y = canon(b);
+  return x === y || (Math.min(x.length, y.length) >= 5 && editDist(x, y) <= 1);
+}
+function samePerson(a, b) {
+  const short = a.length <= b.length ? a : b, long = a.length <= b.length ? b : a;
+  return short.length > 1 && short.every((w) => long.some((x) => closeWord(w, x)));
+}
+
 /* Відсотки залученості подають двічі на місяць: 01–15 і 16–кінець.
    Кожен період фіксується окремо, тож історія лишається. */
 const lastDay = (y, m) => new Date(y, m, 0).getDate();
@@ -390,6 +428,9 @@ export default function TransferDesk() {
   const [finTeam, setFinTeam] = useState("all");
   const [finQuery, setFinQuery] = useState("");
   const [finPick, setFinPick] = useState({});
+  const [repFile, setRepFile] = useState(null);
+  const [repPick, setRepPick] = useState({ p: {}, e: {} });
+  const repRef = useRef(null);
   const [zpReady, setZpReady] = useState(false);
   const [zpBusy, setZpBusy] = useState(false);
   const [settings, setSettings] = useState({ approvalMode: "give" });
@@ -1172,8 +1213,11 @@ export default function TransferDesk() {
     const mStart = finK1.slice(0, 7) + "-01", mMid = finK1.slice(0, 7) + "-15", mMid2 = finK1.slice(0, 7) + "-16", mEnd = lastDayISO(finMonth.y, finMonth.m);
     const inTeam = (e) => !!(e.teamId && teams.some((t) => t.id === e.teamId));
     const working = (e) => workingOn(e, mStart) && (!e.hiredOn || e.hiredOn <= mEnd);
-    // У фін. облік потрапляють усі, хто є в табелі, і ті, у кого в цьому місяці були зміни за переведеннями.
-    const people = employees.filter((e) => working(e) || filled(e.id, finK1) || filled(e.id, finK2));
+    // Завантажений звіт годин має перевагу над табелем, але поступається ручному коригуванню.
+    const repRec = fin.find((x) => x.id === "fr_" + finKey);
+    const repRows = new Map((((repRec && repRec.rows) || [])).map((r) => [r.e, asAlloc((r.a || []).map(([project, percent]) => ({ project, percent })))]));
+    // У фін. облік потрапляють усі, хто є в табелі чи у звіті, і ті, у кого в місяці були зміни за переведеннями.
+    const people = employees.filter((e) => working(e) || filled(e.id, finK1) || filled(e.id, finK2) || repRows.has(e.id));
     const trBy = new Map();
     transfers.forEach((t) => { if (!trBy.has(t.employeeId)) trBy.set(t.employeeId, []); trBy.get(t.employeeId).push(t); });
     const rows = people.map((e) => {
@@ -1184,7 +1228,8 @@ export default function TransferDesk() {
       const byMoves = blendAlloc(e, tr, mStart, mEnd);
       const a1 = sheet ? asAlloc(allocIn(e.id, finK1)).filter((r) => r.percent > 0) : b1;
       const a2 = sheet ? asAlloc(allocIn(e.id, finK2)).filter((r) => r.percent > 0) : b2;
-      const calc = sheet ? mergeHalves(a1, a2, finDays) : byMoves;
+      const fromRep = repRows.get(e.id) || null;
+      const calc = fromRep || (sheet ? mergeHalves(a1, a2, finDays) : byMoves);
       const ov = fin.find((x) => x.id === "fo_" + finKey + "_" + e.id);
       const manual = !!(ov && ov.alloc);
       const alloc = manual ? asAlloc(ov.alloc).filter((r) => r.percent > 0) : calc;
@@ -1193,14 +1238,14 @@ export default function TransferDesk() {
         t1: tagOf(a1, codes), t2: tagOf(a2, codes), calc, calcTag: tagOf(calc, codes),
         alloc, tag: tagOf(alloc, codes), total: num2(alloc.reduce((s, r) => s + r.percent, 0)),
         manual, note: (ov && ov.note) || "", by: manual ? ov.updatedBy || "" : "", at: manual ? ov.updatedAt || "" : "",
-        miss: !sheet ? (moves.length ? "без табеля · за переведеннями" : "без табеля · за довідником")
+        miss: fromRep ? "зі звіту годин" : !sheet ? (moves.length ? "без табеля · за переведеннями" : "без табеля · за довідником")
           : !a1.length && !a2.length ? "немає даних" : !a1.length ? "бракує 01–15" : !a2.length ? "бракує 16–" + finDays : "",
-        source: sheet ? "табель" : moves.length ? "переведення" : "довідник",
+        source: fromRep ? "звіт" : sheet ? "табель" : moves.length ? "переведення" : "довідник",
         // У табелі інші цифри, ніж дають переведення цього місяця, — підкажемо, який тег очікується.
         expect: sheet && moves.length && allocSig(calc) !== allocSig(byMoves) ? tagOf(byMoves, codes) : "",
         moves: moves.map((t) => t.effectiveDate > mStart && t.effectiveDate <= mEnd ? t.effectiveDate : t.returnDate),
       };
-    }).filter((r) => r.source === "табель" || r.moves.length).sort(byTeamName);
+    }).filter((r) => r.source === "табель" || r.source === "звіт" || r.moves.length).sort(byTeamName);
     const pending = teams.filter((t) => employees.some((e) => e.teamId === t.id && workingOn(e, finK1.slice(0, 7) + "-01")))
       .map((t) => ({ name: t.name, h1: !!(t.submitted || {})[finK1], h2: !!(t.submitted || {})[finK2] }));
     return { rows, pending };
@@ -1307,6 +1352,115 @@ export default function TransferDesk() {
   }
   /* Теги для таблиці зарплат: рядок на людину, відсотки по кодах і тег {prd:…}. */
   const finPicked = finShown.filter((r) => finPick[r.id]);
+  /* Звіт годин: один файл на місяць (проєкт, людина, години). Назви, які довелось
+     зіставляти руками, запам'ятовуються, тож наступного місяця питати не доведеться. */
+  const repAlias = settings.reportProjects || {};
+  const repPeople = settings.reportPeople || {};
+  const repRec = fin.find((x) => x.id === "fr_" + finKey);
+  const repCount = ((repRec && repRec.rows) || []).length;
+
+  async function readReport(file) {
+    setRepFile(null); setRepPick({ p: {}, e: {} });
+    try {
+      const isCsv = /\.csv$/i.test(file.name);
+      const wb = isCsv ? XLSX.read(await file.text(), { type: "string" }) : XLSX.read(await file.arrayBuffer(), { type: "array" });
+      let rows = [];
+      for (const n of wb.SheetNames) {
+        const r = XLSX.utils.sheet_to_json(wb.Sheets[n], { defval: "" });
+        if (r.length && Object.keys(r[0]).length >= 3) { rows = r; break; }
+      }
+      const keys = Object.keys(rows[0] || {});
+      const find = (...words) => keys.find((k) => words.some((w) => k.toLowerCase().includes(w)));
+      const kProj = find("project", "проєкт", "проект");
+      const kName = find("employee", "user", "співроб", "людина");
+      const kTime = keys.find((k) => /spent/i.test(k) && !/total/i.test(k)) || find("годин", "hours");
+      const kPct = find("percent", "відсот");
+      if (!kProj || !kName || (!kTime && !kPct)) {
+        return setToast("У файлі не видно потрібних стовпчиків: проєкт, співробітник і години (spent_time) або відсоток.");
+      }
+      const byName = new Map();
+      rows.forEach((r) => {
+        const person = String(r[kName] || "").trim(), project = String(r[kProj] || "").trim();
+        const value = Number(String(kTime ? r[kTime] : r[kPct]).replace(",", ".").replace(/[^\d.\-]/g, "")) || 0;
+        if (!person || !project || value <= 0) return;
+        if (!byName.has(person)) byName.set(person, []);
+        const list = byName.get(person);
+        const same = list.find((x) => x.project === project);
+        if (same) same.value += value; else list.push({ project, value });
+      });
+      if (!byName.size) return setToast("У файлі немає жодного рядка з годинами.");
+      setRepFile({ name: file.name, column: kTime || kPct, people: [...byName].map(([person, list]) => ({ person, list })) });
+    } catch (err) {
+      setToast("Не вдалося прочитати файл: " + ((err && err.message) || "невідомий формат") + ". Приймаються .xlsx і .csv.");
+    }
+  }
+
+  // Що з файлу зійшлося з довідником саме, а де потрібен вибір адміністратора.
+  const repMatch = (() => {
+    if (!repFile) return null;
+    const projAuto = (name) => repAlias[name] || allProjects.find((p) => p.toLowerCase() === name.toLowerCase()) || "";
+    const projOf = (name) => repPick.p[name] || projAuto(name);
+    const byWords = employees.map((e) => ({ e, w: nameWords(e.name) }));
+    const empAuto = (person) => {
+      const saved = repPeople[person] && employees.find((e) => e.id === repPeople[person]);
+      if (saved) return saved;
+      const hits = byWords.filter((x) => samePerson(nameWords(person), x.w));
+      return hits.length === 1 ? hits[0].e : null;
+    };
+    const empOf = (person) => (repPick.e[person] ? employees.find((e) => e.id === repPick.e[person]) : empAuto(person)) || null;
+    const people = repFile.people.map((p) => ({ ...p, emp: empOf(p.person) }));
+    const projects = uniq(repFile.people.flatMap((p) => p.list.map((x) => x.project)));
+    return {
+      people, projOf,
+      ask: projects.filter((name) => !projAuto(name)),
+      lost: repFile.people.filter((p) => !empAuto(p.person)).map((p) => p.person),
+      ready: people.filter((p) => p.emp).length,
+    };
+  })();
+
+  function allocFromReport(list, projOf) {
+    const byProj = new Map();
+    list.forEach((x) => { const p = projOf(x.project); if (p) byProj.set(p, (byProj.get(p) || 0) + x.value); });
+    const sum = [...byProj.values()].reduce((x, v) => x + v, 0);
+    if (!sum) return [];
+    const rows = [...byProj].map(([project, v]) => ({ project, percent: num2((v * 100) / sum) }));
+    // Дрібниці округлення віддаємо найбільшій частці, щоб у сумі вийшло рівно 100.
+    const left = num2(100 - rows.reduce((x, r) => x + r.percent, 0));
+    if (left) { const top = rows.slice().sort((a, b) => b.percent - a.percent)[0]; top.percent = num2(top.percent + left); }
+    return rows.filter((r) => r.percent > 0);
+  }
+
+  function applyReport() {
+    if (!isAdmin) return denied("завантажувати звіт годин може лише адміністратор");
+    if (finClosed) return setToast("Місяць закрито — спершу відкрийте його.");
+    if (!repMatch) return;
+    const rows = repMatch.people.filter((p) => p.emp)
+      .map((p) => ({ e: p.emp.id, a: allocFromReport(p.list, repMatch.projOf).map((r) => [r.project, r.percent]) }))
+      .filter((r) => r.a.length);
+    if (!rows.length) return setToast("Нема чого записати: жодного рядка не зіставлено.");
+    const id = "fr_" + finKey;
+    const rec = { id, kind: "report", monthKey: finKey, file: repFile.name, rows, updatedAt: nowISO(), updatedBy: user.name };
+    setFin((p) => (p.some((x) => x.id === id) ? p.map((x) => (x.id === id ? rec : x)) : [...p, rec]));
+    setSettings((st) => ({
+      ...st,
+      reportProjects: { ...(st.reportProjects || {}), ...repPick.p },
+      reportPeople: { ...(st.reportPeople || {}), ...Object.fromEntries(repMatch.people.filter((p) => p.emp).map((p) => [p.person, p.emp.id])) },
+    }));
+    pushLog("завантажив звіт годин", finLabel(finMonth) + " · " + rows.length + " з " + repMatch.people.length);
+    setToast("Записано з «" + repFile.name + "»: " + rows.length + " " + plural(rows.length, "людина", "людини", "людей") +
+      (repMatch.lost.length ? " · не зіставлено: " + repMatch.lost.length : ""));
+    setRepFile(null); setRepPick({ p: {}, e: {} });
+  }
+
+  function dropReport() {
+    if (!isAdmin) return denied("прибрати звіт може лише адміністратор");
+    if (finClosed) return setToast("Місяць закрито — спершу відкрийте його.");
+    const id = "fr_" + finKey;
+    setFin((p) => p.map((x) => (x.id === id ? { ...x, rows: [], updatedAt: nowISO(), updatedBy: user.name } : x)));
+    pushLog("прибрав звіт годин", finLabel(finMonth));
+    setToast("Звіт прибрано — цифри знову за табелем і переведеннями.");
+  }
+
   function zpRow(r) {
     const parts = tagParts(r.alloc, codes);
     const sum = parts.reduce((x, t) => x + t.pct, 0);
@@ -2518,6 +2672,17 @@ export default function TransferDesk() {
                     border: "1px solid " + (finPicked.length ? C.line : C.lineSoft), background: C.surface, color: finPicked.length ? C.ink2 : C.muted }}>
                   Теги для ЗП{finPicked.length ? " (" + finPicked.length + ")" : ""}
                 </button>
+                {isAdmin && !finClosed && (
+                  <>
+                    <button onClick={() => repRef.current && repRef.current.click()}
+                      title="Завантажити місячний звіт годин з таск-менеджера (.xlsx або .csv)"
+                      style={{ cursor: "pointer", padding: "8px 14px", borderRadius: 3, border: "1px solid " + C.line, background: C.surface, color: C.ink2 }}>
+                      Звіт годин
+                    </button>
+                    <input ref={repRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} aria-label="Файл звіту годин"
+                      onChange={(ev) => { const f = ev.target.files && ev.target.files[0]; if (f) readReport(f); ev.target.value = ""; }} />
+                  </>
+                )}
                 {zpReady && (
                   <button onClick={sendZp} disabled={!finPicked.length || zpBusy}
                     title="Оновити рядки обраних людей в аркуші «Фіксовані теги» Google Таблиці"
@@ -2536,6 +2701,13 @@ export default function TransferDesk() {
                 Якщо одну половину не заповнено, береться інша. Клітинку можна змінити вручну — вона підсвітиться, розрахунок видно в підказці. Галочками можна позначити людей і вивантажити їхні теги для таблиці зарплат.
                 Показано всіх, хто є в табелі, і людей зі змінами за переведеннями в цьому місяці. Хто не в табелі — рахується за переведеннями: переведення з середини місяця дає частку пропорційно дням.
               </p>
+              {repCount > 0 && (
+                <p style={{ margin: "12px 0 0", background: C.signalSoft, border: "1px solid #B9DCE0", borderRadius: 3, padding: "10px 12px", color: C.signal }}>
+                  Цифри {repCount} {plural(repCount, "людини", "людей", "людей")} взято зі звіту годин
+                  {repRec && repRec.file ? " («" + repRec.file + "»)" : ""}{repRec && repRec.updatedBy ? ", завантажив " + repRec.updatedBy : ""}.
+                  {isAdmin && !finClosed && <> <button className="link" style={{ color: C.signal }} onClick={dropReport}>прибрати звіт</button></>}
+                </p>
+              )}
               {!finClosed && finOpen.length > 0 && (
                 <p style={{ margin: "12px 0 0", background: C.warnSoft, border: "1px solid #E6CFA6", borderRadius: 3, padding: "10px 12px", color: C.warn }}>
                   Не всі періоди подано: {finOpen.map((t) => t.name + " (" + [!t.h1 && "01–15", !t.h2 && "16–" + finDays].filter(Boolean).join(", ") + ")").join("; ")}.
@@ -2548,6 +2720,63 @@ export default function TransferDesk() {
                 </p>
               )}
             </section>
+
+            {repFile && repMatch && (
+              <section style={{ ...card, padding: "16px 20px" }}>
+                <div style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
+                  <h3 style={{ margin: 0, fontFamily: SERIF, fontSize: 19, fontWeight: 600 }}>Звіт годин: «{repFile.name}»</h3>
+                  <span style={{ color: C.muted, fontSize: 12.5 }}>
+                    у файлі {repMatch.people.length} {plural(repMatch.people.length, "людина", "людини", "людей")} ·
+                    зіставлено {repMatch.ready} · цифри ляжуть у {finLabel(finMonth)}
+                  </span>
+                </div>
+                {repMatch.ask.length > 0 && (
+                  <div style={{ marginTop: 12 }}>
+                    <p style={{ margin: "0 0 6px", color: C.warn, fontSize: 12.5 }}>
+                      Невідомі проєкти зі звіту — оберіть, чому вони відповідають. Без вибору ці години не врахуються.
+                    </p>
+                    <div style={{ display: "grid", gap: 6 }}>
+                      {repMatch.ask.map((name) => (
+                        <div key={name} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                          <span style={{ minWidth: 240, fontSize: 12.5 }}>{name}</span>
+                          <select value={repPick.p[name] || ""} aria-label={"Проєкт для " + name} style={{ width: 260 }}
+                            onChange={(ev) => setRepPick((m) => ({ ...m, p: { ...m.p, [name]: ev.target.value } }))}>
+                            <option value="">— пропустити —</option>
+                            {orderedProjects.map((pr) => <option key={pr} value={pr}>{pr}</option>)}
+                          </select>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {repMatch.lost.length > 0 && (
+                  <div style={{ marginTop: 12 }}>
+                    <p style={{ margin: "0 0 6px", color: C.warn, fontSize: 12.5 }}>
+                      Не впізнали людей за іменем — оберіть зі списку або лишіть порожнім, тоді їхні рядки пропустимо.
+                    </p>
+                    <div style={{ display: "grid", gap: 6 }}>
+                      {repMatch.lost.map((person) => (
+                        <div key={person} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                          <span style={{ minWidth: 240, fontSize: 12.5 }}>{person}</span>
+                          <select value={repPick.e[person] || ""} aria-label={"Співробітник для " + person} style={{ width: 260 }}
+                            onChange={(ev) => setRepPick((m) => ({ ...m, e: { ...m.e, [person]: ev.target.value } }))}>
+                            <option value="">— пропустити —</option>
+                            {employees.slice().sort((a, b) => a.name.localeCompare(b.name, "uk")).map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
+                          </select>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+                  <button style={addBtn} onClick={applyReport}>Записати в {finLabel(finMonth)}</button>
+                  <button className="ghost" onClick={() => { setRepFile(null); setRepPick({ p: {}, e: {} }); }}>Скасувати</button>
+                  <span style={{ color: C.muted, fontSize: 12.5, alignSelf: "center" }}>
+                    Ручні коригування лишаться зверху звіту; табель і переведення підуть на другий план.
+                  </span>
+                </div>
+              </section>
+            )}
 
             <section style={{ ...card, overflow: "hidden" }}>
               {finShown.length === 0 ? (
