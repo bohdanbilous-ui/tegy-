@@ -390,6 +390,8 @@ export default function TransferDesk() {
   const [finTeam, setFinTeam] = useState("all");
   const [finQuery, setFinQuery] = useState("");
   const [finPick, setFinPick] = useState({});
+  const [zpReady, setZpReady] = useState(false);
+  const [zpBusy, setZpBusy] = useState(false);
   const [settings, setSettings] = useState({ approvalMode: "give" });
   const [deleted, setDeleted] = useState({});
   const [approveNote, setApproveNote] = useState({});
@@ -572,6 +574,7 @@ export default function TransferDesk() {
     return () => clearInterval(id);
   }, [ready, user]);
   useEffect(() => { if (tab === "req") loadRequests(); }, [tab]);
+  useEffect(() => { if (tab === "fin") loadZp(); }, [tab, user]);
   useEffect(() => { if (tab === "lists" && book === "emp") loadPf(); }, [tab, book, user]);
 
   const tomb = (key) => setDeleted((d) => ({ ...d, [key]: nowISO() }));
@@ -1304,22 +1307,55 @@ export default function TransferDesk() {
   }
   /* Теги для таблиці зарплат: рядок на людину, відсотки по кодах і тег {prd:…}. */
   const finPicked = finShown.filter((r) => finPick[r.id]);
+  function zpRow(r) {
+    const parts = tagParts(r.alloc, codes);
+    const sum = parts.reduce((x, t) => x + t.pct, 0);
+    const noCode = parts.filter((t) => !t.code).map((t) => t.project);
+    return {
+      name: r.name, tag: r.tag ? "{prd:" + r.tag + "}" : "",
+      status: noCode.length ? "без коду: " + noCode.join(", ") : sum === 100 ? "OK 100%" : "сума " + sum + "%",
+      pct: Object.fromEntries(parts.filter((t) => t.code).map((t) => [t.code, t.pct])),
+    };
+  }
   function exportZp() {
-    const rows = finPicked.length ? finPicked : [];
-    if (!rows.length) return setToast("Позначте галочками, чиї теги вивантажити.");
+    if (!finPicked.length) return setToast("Позначте галочками, чиї теги вивантажити.");
+    const rows = finPicked.map(zpRow);
     downloadXlsx("tegy-zp-" + finKey + ".xlsx", [
       { name: "Фіксовані теги", freeze: 1, cols: [34, ...CODES.map(() => 9), 34, 22],
         rows: [["Співробітник", ...CODES.map((c) => c + " %"), "Тег (авто)", "Статус"],
-          ...rows.map((r) => {
-            const parts = tagParts(r.alloc, codes);
-            const sum = parts.reduce((x, t) => x + t.pct, 0);
-            const noCode = parts.filter((t) => !t.code).map((t) => t.project);
-            return [r.name, ...CODES.map((c) => { const t = parts.find((x) => x.code === c); return t ? t.pct : ""; }),
-              r.tag ? "{prd:" + r.tag + "}" : "",
-              noCode.length ? "без коду: " + noCode.join(", ") : sum === 100 ? "OK 100%" : "сума " + sum + "%"];
-          })] },
+          ...rows.map((r) => [r.name, ...CODES.map((c) => (r.pct[c] ? r.pct[c] : "")), r.tag, r.status])] },
     ]);
     setToast("Вивантажено " + rows.length + " " + plural(rows.length, "рядок", "рядки", "рядків") + " для таблиці зарплат.");
+  }
+  /* Ті самі рядки, але прямо в Google Таблицю: сервер знає адресу скрипта й ключ. */
+  async function loadZp() {
+    if (!isAdmin || !tokenRef.current) return;
+    try {
+      const res = await fetch("/api/zp-sheet", { headers: { Authorization: "Bearer " + tokenRef.current }, cache: "no-store" });
+      const d = await res.json().catch(() => ({}));
+      setZpReady(!!d.ready);
+    } catch (e) { /* не критично: лишиться вивантаження файлом */ }
+  }
+  async function sendZp() {
+    if (!finPicked.length) return setToast("Позначте галочками, чиї теги надіслати.");
+    if (!window.confirm("Оновити теги в Google Таблиці для " + finPicked.length + " " +
+      plural(finPicked.length, "людини", "людей", "людей") + "? Попередні значення в їхніх рядках буде замінено.")) return;
+    setZpBusy(true);
+    try {
+      const res = await fetch("/api/zp-sheet", {
+        method: "POST", cache: "no-store",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + tokenRef.current },
+        body: JSON.stringify({ rows: finPicked.map(zpRow) }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.error || "HTTP " + res.status);
+      const done = (d.updated || 0) + (d.added || 0);
+      const bad = d.problems || [];
+      setToast("Оновлено в таблиці: " + done + (bad.length ? " · не знайшли: " + bad.slice(0, 3).join("; ") + (bad.length > 3 ? " та ще " + (bad.length - 3) : "") : ""));
+      pushLog("надіслав теги в Google Таблицю", finLabel(finMonth) + " · " + done + " з " + finPicked.length);
+    } catch (e) {
+      setToast("Не вийшло надіслати: " + e.message);
+    } finally { setZpBusy(false); }
   }
 
   function exportFin() {
@@ -2482,6 +2518,15 @@ export default function TransferDesk() {
                     border: "1px solid " + (finPicked.length ? C.line : C.lineSoft), background: C.surface, color: finPicked.length ? C.ink2 : C.muted }}>
                   Теги для ЗП{finPicked.length ? " (" + finPicked.length + ")" : ""}
                 </button>
+                {zpReady && (
+                  <button onClick={sendZp} disabled={!finPicked.length || zpBusy}
+                    title="Оновити рядки обраних людей в аркуші «Фіксовані теги» Google Таблиці"
+                    style={{ cursor: finPicked.length && !zpBusy ? "pointer" : "default", padding: "8px 14px", borderRadius: 3,
+                      border: "1px solid " + (finPicked.length ? C.line : C.lineSoft), background: finPicked.length && !zpBusy ? C.signalSoft : C.surface,
+                      color: finPicked.length && !zpBusy ? C.signal : C.muted }}>
+                    {zpBusy ? "Надсилаю…" : "У Google Таблицю" + (finPicked.length ? " (" + finPicked.length + ")" : "")}
+                  </button>
+                )}
                 <button onClick={exportFin} style={{ cursor: "pointer", padding: "8px 14px", borderRadius: 3, border: "1px solid " + C.line, background: C.surface, color: C.ink2 }}>
                   Звіт в Excel
                 </button>
