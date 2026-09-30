@@ -29,8 +29,6 @@ export const DEFAULT_TPL = {
   gig: "Оплата винагороди згідно укладеного гіг-контракту за {мм}/{рік}. Податки сплачено повністю з пільгами згідно статусу резидента Дія.Сіті {тег}",
 };
 const TYPE_KEY = { "Штат": "staff", "Гіг": "gig" };
-// Тип зайнятості з PeopleForce → Штат / Гіг. Невідомий тип лишається порожнім — його задають вручну.
-export const mapType = (s) => (/гіг|gig/i.test(s || "") ? "Гіг" : /штат|трудов|full|part|employ|основн/i.test(s || "") ? "Штат" : "");
 
 /* «cbx-80, cbx_pos-15» → [{ code, pct }]. */
 export function parseFixed(str) {
@@ -100,16 +98,18 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
   };
   const spans = { staff: spanOf(staffSpan), gig: spanOf(gigSpan) };
   const knownCodes = useMemo(() => new Set([...(codeList || []), ...Object.values(codes || {}).filter(Boolean)]), [codeList, codes]);
-  const legals = useMemo(() => [...new Set([
-    ...(pay.legals || []), ...employees.map((e) => e.payLegal || e.pfLegal), ...(fpv || []).map((f) => f.legal),
-  ].filter(Boolean))].sort((a, b) => a.localeCompare(b, "uk")), [employees, fpv, pay.legals]);
+  // Довідник юросіб: з нього в кожному рядку обирається юрособа.
+  const legalBook = useMemo(() => (pay.legals || []).map((x) => (typeof x === "string" ? { name: x } : { name: x.name || "" })).filter((x) => x.name),
+    [pay.legals]);
+  const legalNames = legalBook.map((x) => x.name);
+  const setLegalBook = (list) => setPay({ legals: list });
 
   /* ─── розрахунок рядків відомостей ─── */
   const rows = useMemo(() => {
     const calcs = { staff: spanCalculator(spans.staff.from, spans.staff.to), gig: spanCalculator(spans.gig.from, spans.gig.to) };
     const list = [];
     employees.forEach((e) => {
-      const type = e.payType || mapType(e.pfType) || e.fileType || "";
+      const type = e.payType || e.fileType || "";
       const sp = spans[TYPE_KEY[type] || "staff"];
       if (e.hiredOn && e.hiredOn > sp.to) return;
       if (e.leftOn && e.leftOn < sp.from) return;
@@ -121,8 +121,8 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
       else { parts = toParts(calc.alloc); source = calc.kind === "довідник" ? "довідник" : "—"; }
       list.push({
         id: e.id, kind: "emp", name: e.pfFio || e.name, short: e.name, type,
-        typeAuto: mapType(e.pfType) || e.fileType || "", typePf: e.pfType || "",
-        legal: e.payLegal || e.pfLegal || "", legalAuto: e.pfLegal || "",
+        typeAuto: e.fileType || "",
+        legal: e.payLegal || "",
         like: e.payLike || "", off: !!e.payOff, fixed: e.payFixed || "", fileFixed: e.fileFixed || "",
         parts, source, notes, sp,
       });
@@ -131,7 +131,7 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
       const type = f.type || "Гіг";
       const sp = spans[TYPE_KEY[type] || "gig"];
       const { parts } = parseFixed(f.fixed || "fpv-100");
-      list.push({ id: f.id, kind: "fpv", name: f.name, short: f.name, type, typeAuto: "", typePf: "", legal: f.legal || "", legalAuto: "",
+      list.push({ id: f.id, kind: "fpv", name: f.name, short: f.name, type, typeAuto: "", legal: f.legal || "",
         like: "", off: false, fixed: f.fixed || "fpv-100", fileFixed: "", parts: parts.map((p) => ({ ...p, project: p.code })), source: "FPV", notes: [], sp });
     });
     const byId = new Map(list.map((r) => [r.id, r]));
@@ -153,6 +153,7 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
       if (r.parts.length && !noCode.length && sum !== 100) prob.push("сума " + sum + "%");
       if (!inn[r.id]) prob.push("немає ІПН");
       if (!r.legal) prob.push("немає юрособи");
+      else if (legalBook.length && !legalNames.includes(r.legal)) prob.push("юрособи «" + r.legal + "» немає в довіднику");
       r.tagBody = r.parts.filter((p) => p.code).map((p) => p.code + "-" + p.pct).join(",");
       r.tag = r.tagBody ? "{prd:" + r.tagBody + "}" : "";
       r.problems = prob;
@@ -160,7 +161,7 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
       r.purpose = r.tag ? fillTpl(tpl[TYPE_KEY[r.type] || "staff"], { half: r.sp.half, m: per.m, y: per.y, name: r.name, tag: r.tag }) : "";
     });
     return list.sort((a, b) => a.name.localeCompare(b.name, "uk"));
-  }, [employees, fpv, per.y, per.m, per.half, staffSpan, gigSpan, codes, inn, knownCodes, tpl.staff, tpl.gig, spanCalculator, toParts]);
+  }, [employees, fpv, per.y, per.m, per.half, staffSpan, gigSpan, codes, inn, knownCodes, tpl.staff, tpl.gig, spanCalculator, toParts, legalBook]);
 
   const included = rows.filter((r) => !r.off);
   const statements = useMemo(() => {
@@ -187,13 +188,12 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
     catch (e) { setToast("Не вдалося показати ІПН: " + e.message); }
   }
   async function askInn(r) {
-    const v = window.prompt("ІПН для «" + r.name + "»" + (inn[r.id] ? " (зараз " + inn[r.id].m + ", " + (inn[r.id].src === "pf" ? "з PeopleForce" : "введено вручну") + ")" : "") +
-      ".\nПорожньо — прибрати введений вручну.", "");
+    const v = window.prompt("ІПН для «" + r.name + "»" + (inn[r.id] ? " (зараз " + inn[r.id].m + ")" : "") + ".\nПорожньо — прибрати.", "");
     if (v === null) return;
     try {
       const d = await callPay("POST", { action: "inn", items: [{ id: r.id, inn: v.trim() }] });
       setInn(d.inn || {});
-      setToast(d.bad ? "ІПН не збережено: має бути 8–12 цифр або літер." : v.trim() ? "ІПН збережено." : "ІПН, введений вручну, прибрано.");
+      setToast(d.bad ? "ІПН не збережено: має бути 8–12 цифр або літер." : v.trim() ? "ІПН збережено." : "ІПН прибрано.");
     } catch (e) { setToast("Не вдалося зберегти ІПН: " + e.message); }
   }
 
@@ -308,7 +308,6 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
 
   return (
     <div style={{ display: "grid", gap: 20 }}>
-      <datalist id="pay-legals">{legals.map((l) => <option key={l} value={l} />)}</datalist>
       <datalist id="pay-people">{rows.map((r) => <option key={r.id} value={r.name} />)}</datalist>
 
       <section style={{ ...card, padding: "16px 20px" }}>
@@ -332,7 +331,7 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
         </div>
         <p style={{ margin: "10px 0 0", color: C.muted, fontSize: 12.5 }}>
           Теги Штату — за {spanText(staffSpan)}, Гігу — за {spanText(gigSpan)}. Розподіл: «тег як у …» → табель / звіт годин / коригування → фіксований → довідник.
-          Юрособа, тип і ІПН приходять із PeopleForce щоночі; вручну поставлене значення має перевагу.
+          Юрособа, Штат/Гіг і ІПН задаються тут (або імпортом з таблиці «Теги ЗП»); ПІБ повністю приходить із PeopleForce.
         </p>
         {!sheetReady && (
           <p style={{ margin: "10px 0 0", background: C.warnSoft, borderRadius: 3, padding: "10px 14px", color: C.ink2, fontSize: 12.5 }}>
@@ -369,11 +368,6 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
             ))}
             <div style={small}>Підстановки: {"{половину}"} (першу/другу половину), {"{місяця}"} (вересня), {"{місяць}"} (вересень), {"{мм}"} (09), {"{рік}"}, {"{ПІБ}"}, {"{тег}"}.
               {" "}<button className="link" onClick={() => setPay({ tpl: DEFAULT_TPL })}>повернути стандартні</button></div>
-            <div>
-              <label style={{ fontSize: 12.5, fontWeight: 600, color: C.ink2 }}>Юрособи (додаткові до тих, що приходять із PeopleForce)</label>
-              <input type="text" defaultValue={(pay.legals || []).join("; ")} placeholder="ТОВ …; ФОП …" style={{ marginTop: 4 }}
-                onBlur={(e) => setPay({ legals: e.target.value.split(";").map((x) => x.trim()).filter(Boolean) })} />
-            </div>
           </div>
         )}
       </section>
@@ -421,19 +415,27 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
                   <td style={{ padding: 4 }}>
                     <select value={r.kind === "fpv" ? r.type : (employees.find((e) => e.id === r.id) || {}).payType || ""} aria-label={"Тип, " + r.name}
                       onChange={(e) => edit(r, r.kind === "fpv" ? { type: e.target.value } : { payType: e.target.value })} style={{ padding: "6px 8px" }}>
-                      {r.kind !== "fpv" && <option value="">{r.typeAuto ? "авто: " + r.typeAuto : "—"}</option>}
+                      {r.kind !== "fpv" && <option value="">{r.typeAuto ? "з файлу: " + r.typeAuto : "—"}</option>}
                       <option value="Штат">Штат</option><option value="Гіг">Гіг</option>
                     </select>
-                    {r.typePf && <div style={small} title="Тип зайнятості в PeopleForce">PF: {r.typePf}</div>}
                   </td>
                   <td style={{ padding: 4 }}>
-                    <input type="text" list="pay-legals" defaultValue={r.kind === "fpv" ? r.legal : (employees.find((e) => e.id === r.id) || {}).payLegal || ""}
-                      key={r.id + "|" + r.legal} placeholder={r.legalAuto ? "авто: " + r.legalAuto : "—"} aria-label={"Юрособа, " + r.name}
-                      onBlur={(e) => { const v = e.target.value.trim(); edit(r, r.kind === "fpv" ? { legal: v } : { payLegal: v }); }} />
+                    {(() => {
+                      const cur = r.kind === "fpv" ? r.legal : (employees.find((e) => e.id === r.id) || {}).payLegal || "";
+                      const extra = cur && !legalNames.includes(cur) ? [cur] : [];
+                      return (
+                        <select value={cur} aria-label={"Юрособа, " + r.name} style={{ padding: "6px 8px", maxWidth: 220 }}
+                          onChange={(e) => edit(r, r.kind === "fpv" ? { legal: e.target.value } : { payLegal: e.target.value })}>
+                          <option value="">—</option>
+                          {legalNames.map((n) => <option key={n} value={n}>{n}</option>)}
+                          {extra.map((n) => <option key={"x" + n} value={n}>{n} (немає в довіднику)</option>)}
+                        </select>
+                      );
+                    })()}
                   </td>
                   <td>
                     <button className="link num" style={{ fontSize: 12, color: inn[r.id] ? C.ink2 : C.stop }} onClick={() => askInn(r)}
-                      title={inn[r.id] ? (inn[r.id].src === "pf" ? "З PeopleForce" : "Введено вручну") + " — змінити" : "Ввести ІПН"}>
+                      title={inn[r.id] ? "Змінити ІПН" : "Ввести ІПН"}>
                       {inn[r.id] ? (shownInn[r.id] || inn[r.id].m) : "ввести"}
                     </button>
                     {inn[r.id] && <div><button className="link" style={{ fontSize: 11 }} onClick={() => revealInn(r)}>{shownInn[r.id] ? "сховати" : "показати"}</button></div>}
@@ -475,6 +477,69 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
 
       <section style={{ ...card, padding: "16px 20px" }}>
         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <h3 style={{ margin: 0, fontFamily: SERIF, fontSize: 19, fontWeight: 600 }}>Довідник юросіб</h3>
+          <span style={{ color: C.muted, fontSize: 12.5 }}>з цього списку обирається юрособа людини; кожна юрособа — окремі відомості Штат і Гіг</span>
+        </div>
+        {legalBook.length === 0 ? (
+          <p style={{ margin: "12px 0 0", color: C.muted, fontSize: 12.5 }}>Довідник порожній. Додайте юрособи нижче.</p>
+        ) : (
+          <table style={{ marginTop: 12 }}>
+            <thead><tr>
+              <th style={{ minWidth: 260 }}>Назва (як у відомостях)</th>
+              <th style={{ width: 90, textAlign: "center" }}>Людей</th>
+              <th style={{ width: 44 }} />
+            </tr></thead>
+            <tbody>
+              {legalBook.map((x, i) => {
+                const used = included.filter((r) => r.legal === x.name).length;
+                return (
+                  <tr key={x.name + i}>
+                    <td style={{ padding: 4 }}>
+                      <input type="text" defaultValue={x.name} key={"n" + x.name} disabled={!canEdit} aria-label="Назва юрособи"
+                        onBlur={(e) => {
+                          const v = e.target.value.trim();
+                          if (!v || v === x.name) { e.target.value = x.name; return; }
+                          if (legalNames.includes(v)) { setToast("«" + v + "» уже є в довіднику."); e.target.value = x.name; return; }
+                          setLegalBook(legalBook.map((y, j) => (j === i ? { ...y, name: v } : y)));
+                          // Перейменування переносимо в картки людей і FPV, де юрособу поставили вручну.
+                          setEmployees((p) => p.map((e2) => (e2.payLegal === x.name ? { ...e2, payLegal: v, updatedAt: stamp() } : e2)));
+                          setFpv((p) => (p || []).map((f) => (f.legal === x.name ? { ...f, legal: v, updatedAt: stamp() } : f)));
+                        }} />
+                    </td>
+                    <td className="num" style={{ textAlign: "center" }}>{used || "—"}</td>
+                    <td style={{ textAlign: "center" }}>
+                      {canEdit && (
+                        <button className="link" aria-label={"Прибрати " + x.name} style={{ color: C.stop }}
+                          onClick={() => {
+                            if (!window.confirm("Прибрати «" + x.name + "» з довідника?" + (used ? "\n\nЇї зараз мають " + used + " " + plural(used, "людина", "людини", "людей") + " — у них з'явиться позначка «немає в довіднику»." : ""))) return;
+                            setLegalBook(legalBook.filter((y, j) => j !== i));
+                          }}>×</button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+        {canEdit && (
+          <form style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}
+            onSubmit={(e) => {
+              e.preventDefault();
+              const v = e.target.elements.newLegal.value.trim();
+              if (!v) return;
+              if (legalNames.some((n) => low(n) === low(v))) return setToast("«" + v + "» уже є в довіднику.");
+              setLegalBook([...legalBook, { name: v }]);
+              e.target.reset();
+            }}>
+            <input name="newLegal" type="text" placeholder="ТОВ «…» або ФОП …" aria-label="Нова юрособа" style={{ width: 320 }} />
+            <button type="submit" style={btn(true)}>Додати</button>
+          </form>
+        )}
+      </section>
+
+      <section style={{ ...card, padding: "16px 20px" }}>
+        <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           <h3 style={{ margin: 0, fontFamily: SERIF, fontSize: 19, fontWeight: 600 }}>Довідник FPV</h3>
           <span style={{ color: C.muted, fontSize: 12.5 }}>окремі люди поза PeopleForce; у відомості йдуть разом з усіма, розподіл за замовчуванням fpv-100</span>
           {canEdit && <button onClick={() => fileRef.current && fileRef.current.click()} style={{ ...btn(true), marginLeft: "auto" }}>Імпорт з таблиці «Теги ЗП»</button>}
@@ -484,14 +549,14 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
         {imp && (
           <div style={{ marginTop: 14, background: "#F4F7FC", border: "1px solid " + C.lineSoft, borderRadius: 3, padding: "14px 16px", fontSize: 13 }}>
             <p style={{ margin: 0, fontWeight: 600 }}>«{imp.file}», аркуш «{imp.sheet}»</p>
-            <p style={{ margin: "6px 0 0" }}>FPV (розподіл лише fpv): <b>{imp.fp.length}</b> — нових {imp.fp.filter((x) => !x.old).length}, оновиться {imp.fp.filter((x) => x.old).length}. ІПН FPV збережуться окремо, лише для адміністратора.</p>
+            <p style={{ margin: "6px 0 0" }}>FPV (розподіл лише fpv): <b>{imp.fp.length}</b> — нових {imp.fp.filter((x) => !x.old).length}, оновиться {imp.fp.filter((x) => x.old).length}. ІПН зберігаються окремо — бачать лише адміністратор і бухгалтер.</p>
             <label style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
               <input type="checkbox" checked={imp.withEmp} style={{ width: "auto" }} onChange={(e) => setImp((x) => ({ ...x, withEmp: e.target.checked }))} />
-              Співробітникам, яких знайдено в довіднику ({imp.emp.length}), записати фіксований розподіл і Штат/Гіг з файлу як запасні (якщо немає табеля й типу з PeopleForce)
+              Співробітникам, яких знайдено в довіднику ({imp.emp.length}), записати фіксований розподіл (якщо немає табеля) і Штат/Гіг з файлу
             </label>
             <label style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
               <input type="checkbox" checked={imp.withInn} style={{ width: "auto" }} onChange={(e) => setImp((x) => ({ ...x, withInn: e.target.checked }))} />
-              Їхні ІПН з файлу — як запасні, якщо PeopleForce ІПН не дає
+              і їхні ІПН з файлу
             </label>
             {imp.lost.length > 0 && (
               <details style={{ marginTop: 8 }}>
