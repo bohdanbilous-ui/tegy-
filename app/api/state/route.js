@@ -99,7 +99,7 @@ function guardHrd(stored, inc, me) {
   inc.fin = stored.fin || [];
   inc.fpv = stored.fpv || [];
   // Поля відомостей ЗП у картках людей править лише адміністратор.
-  const PAY = ["payType", "payLegal", "payFixed", "payLike", "payOff", "fileType", "fileFixed"];
+  const PAY = ["payType", "payLegal", "payFixed", "payLike", "payOff", "fileType", "fileFixed", "payFio", "fileFio"];
   const eStored = byId(stored.employees);
   (inc.employees || []).forEach((e) => { const o = eStored.get(e.id); if (o) PAY.forEach((k) => { if (k in o) e[k] = o[k]; else delete e[k]; }); });
   inc.log = (inc.log || []).filter((l) => sameName(l.who, me.name));
@@ -159,7 +159,7 @@ function guardAccountant(stored, inc, me) {
   const known = new Set((stored.employees || []).map((e) => e.id));
   if ((inc.employees || []).some((e) => !known.has(e.id) && !(stored.deleted || {})["e:" + e.id])) return "додавати людей може лише адміністратор";
   const keep = { ...stored };
-  keep.employees = pick(stored.employees, incE, ["payLegal", "payType", "payFixed", "payLike", "payOff", "fileFixed", "fileType"]);
+  keep.employees = pick(stored.employees, incE, ["payLegal", "payType", "payFixed", "payLike", "payOff", "fileFixed", "fileType", "payFio", "fileFio"]);
   keep.fpv = inc.fpv || stored.fpv || []; // довідник FPV бухгалтер веде повністю (злиття нижче лишить новіші правки)
   keep.settings = { ...(stored.settings || {}), pay: (inc.settings && inc.settings.pay) || (stored.settings || {}).pay };
   const ownLog = (inc.log || []).filter((l) => sameName(l.who, me.name));
