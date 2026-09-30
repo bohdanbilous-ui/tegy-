@@ -433,6 +433,8 @@ export default function TransferDesk() {
   const repRef = useRef(null);
   const [zpReady, setZpReady] = useState(false);
   const [zpBusy, setZpBusy] = useState(false);
+  // Підсумок останнього надсилання в Google Таблицю: хто не потрапив і чому.
+  const [zpReport, setZpReport] = useState(null);
   const [settings, setSettings] = useState({ approvalMode: "give" });
   const [deleted, setDeleted] = useState({});
   const [approveNote, setApproveNote] = useState({});
@@ -1494,23 +1496,48 @@ export default function TransferDesk() {
     if (!finPicked.length) return setToast("Позначте галочками, чиї теги надіслати.");
     if (!window.confirm("Оновити теги в Google Таблиці для " + finPicked.length + " " +
       plural(finPicked.length, "людини", "людей", "людей") + "? Попередні значення в їхніх рядках буде замінено.")) return;
+    // Рядки без жодного відсотка з кодом передавати нема чого — їх не шлемо, а одразу показуємо в підсумку.
+    const all = finPicked.map((r) => ({ r, z: zpRow(r) }));
+    const empty = all.filter((x) => !Object.keys(x.z.pct).length);
+    const send = all.filter((x) => Object.keys(x.z.pct).length);
+    const skipped = empty.map((x) => ({ id: x.r.id, name: x.r.name, team: x.r.team,
+      reason: x.r.alloc.length ? x.z.status : "немає даних — нема чого передати" }));
+    if (!send.length) {
+      setZpReport({ at: nowISO(), month: finLabel(finMonth), total: all.length, done: 0, missing: skipped, other: [], unknown: 0 });
+      return setToast("Нічого не надіслано: в обраних людей немає тегів із кодами.");
+    }
     setZpBusy(true);
     try {
       const res = await fetch("/api/zp-sheet", {
         method: "POST", cache: "no-store",
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + tokenRef.current },
-        body: JSON.stringify({ rows: finPicked.map(zpRow) }),
+        body: JSON.stringify({ rows: send.map((x) => x.z) }),
       });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(d.error || "HTTP " + res.status);
       const done = (d.updated || 0) + (d.added || 0);
-      const bad = d.problems || [];
-      setToast("Оновлено в таблиці: " + done + (bad.length ? " · не знайшли: " + bad.slice(0, 3).join("; ") + (bad.length > 3 ? " та ще " + (bad.length - 3) : "") : ""));
-      pushLog("надіслав теги в Google Таблицю", finLabel(finMonth) + " · " + done + " з " + finPicked.length);
+      const bad = (d.problems || []).map((p) => String(p));
+      // Зіставляємо повідомлення скрипта з людьми за ПІБ.
+      const low = (s) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
+      const used = new Set();
+      const failed = [];
+      send.forEach((x) => {
+        const i = bad.findIndex((p, k) => !used.has(k) && low(p).includes(low(x.r.name)));
+        if (i >= 0) { used.add(i); failed.push({ id: x.r.id, name: x.r.name, team: x.r.team, reason: bad[i] }); }
+      });
+      const other = bad.filter((p, k) => !used.has(k));
+      const unknown = Math.max(0, send.length - done - failed.length - other.length);
+      const missing = [...failed, ...skipped];
+      setZpReport({ at: nowISO(), month: finLabel(finMonth), total: all.length, done, missing, other, unknown });
+      const notSent = missing.length + other.length + unknown;
+      setToast("Оновлено в таблиці: " + done + " з " + all.length + (notSent ? " · не передано: " + notSent + " — список під кнопками" : ""));
+      pushLog("надіслав теги в Google Таблицю", finLabel(finMonth) + " · " + done + " з " + all.length +
+        (missing.length ? " · не передано: " + missing.map((m) => m.name).join(", ") : ""));
     } catch (e) {
       setToast("Не вийшло надіслати: " + e.message);
     } finally { setZpBusy(false); }
   }
+  const zpMissIds = new Set((zpReport && zpReport.month === finLabel(finMonth) ? zpReport.missing : []).map((m) => m.id));
 
   function exportFin() {
     const rows = finRows;
@@ -2719,6 +2746,55 @@ export default function TransferDesk() {
                   щоб перерахувати, відкрийте місяць знову.
                 </p>
               )}
+              {zpReport && zpReport.month === finLabel(finMonth) && (() => {
+                const n = zpReport.missing.length + zpReport.other.length + zpReport.unknown;
+                const ok = n === 0;
+                return (
+                  <div style={{ margin: "12px 0 0", background: ok ? C.signalSoft : C.warnSoft, border: "1px solid " + (ok ? "#B9DCE0" : "#E6CFA6"),
+                    borderRadius: 3, padding: "10px 12px", color: ok ? C.signal : C.warn }}>
+                    <div style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
+                      <strong>
+                        Google Таблиця · {zpReport.month}: передано {zpReport.done} з {zpReport.total}
+                        {ok ? " — усіх передано." : " · не передано: " + n}
+                      </strong>
+                      <span style={{ fontSize: 12 }}>{fmtDT(zpReport.at)}</span>
+                      <span style={{ marginLeft: "auto", display: "flex", gap: 12 }}>
+                        {zpReport.missing.length > 0 && (
+                          <button className="link" style={{ color: "inherit" }}
+                            title="Залишити галочки лише на тих, кого не передано, щоб надіслати ще раз"
+                            onClick={() => setFinPick(Object.fromEntries(zpReport.missing.map((m) => [m.id, true])))}>
+                            позначити лише їх
+                          </button>
+                        )}
+                        {!ok && (
+                          <button className="link" style={{ color: "inherit" }}
+                            onClick={() => {
+                              const t = [...zpReport.missing.map((m) => m.name + " — " + m.reason), ...zpReport.other].join("\n");
+                              try { navigator.clipboard.writeText(t); setToast("Список скопійовано."); } catch (e) { setToast("Не вдалося скопіювати."); }
+                            }}>
+                            копіювати список
+                          </button>
+                        )}
+                        <button className="link" style={{ color: "inherit" }} onClick={() => setZpReport(null)}>закрити</button>
+                      </span>
+                    </div>
+                    {!ok && (
+                      <ul style={{ margin: "8px 0 0", paddingLeft: 18, fontSize: 13 }}>
+                        {zpReport.missing.map((m) => (
+                          <li key={m.id}>
+                            <button className="link" style={{ color: "inherit", fontWeight: 600, textDecoration: "none" }} onClick={() => setCardId(m.id)}>{m.name}</button>
+                            {m.team ? <span style={{ opacity: 0.8 }}> · {m.team}</span> : null} — {m.reason}
+                          </li>
+                        ))}
+                        {zpReport.other.map((p, i) => <li key={"o" + i}>{p}</li>)}
+                        {zpReport.unknown > 0 && (
+                          <li>ще {zpReport.unknown} — таблиця не оновила ці рядки, але не назвала, кого саме. Перевірте аркуш «Фіксовані теги».</li>
+                        )}
+                      </ul>
+                    )}
+                  </div>
+                );
+              })()}
             </section>
 
             {repFile && repMatch && (
@@ -2824,6 +2900,7 @@ export default function TransferDesk() {
                               {r.miss && <div style={{ color: r.source === "табель" ? C.warn : C.muted, fontSize: 11.5 }}>{r.miss}</div>}
                               {r.expect && <div style={{ color: C.plan, fontSize: 11.5 }} title={"Переведення: " + (r.moves || []).map(fmt).join(", ")}>за переведеннями: {r.expect}</div>}
                               {r.drift && <div style={{ color: C.warn, fontSize: 11.5 }}>табель змінено після закриття</div>}
+                              {zpMissIds.has(r.id) && <div style={{ color: C.warn, fontSize: 11.5, fontWeight: 600 }}>не передано в Google Таблицю</div>}
                             </td>
                             <td className="num" style={{ fontSize: 12, color: r.t1 ? C.ink2 : C.muted, wordBreak: "break-all" }}>{r.t1 || "—"}</td>
                             <td className="num" style={{ fontSize: 12, color: r.t2 ? C.ink2 : C.muted, wordBreak: "break-all" }}>{r.t2 || "—"}</td>
