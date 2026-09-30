@@ -4,6 +4,7 @@ import { readState, writeState, readKey, writeKey } from "../../../lib/store";
 import { mergeState, nowISO } from "../../../lib/merge";
 import { whoIs } from "../../../lib/auth";
 import { pfConfigured, pullPeopleForce, applyPeople } from "../../../lib/peopleforce";
+import { writePfInn } from "../../../lib/pay";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -52,9 +53,14 @@ async function run(by) {
         details: "нових " + report.added.length + ", оновлено " + report.updated.length + ", звільнено " + report.left.length }, ...(merged.log || [])].slice(0, 300);
       await writeState(merged);
     }
+    // ІПН з PeopleForce — в окреме сховище, лише для адміністратора (не в спільний стан).
+    const pfToEmp = new Map((merged.employees || []).filter((e) => e.pfId).map((e) => [String(e.pfId), e.id]));
+    const inn = {};
+    people.forEach((p) => { const id = pfToEmp.get(String(p.pfId)); if (id && p.inn) inn[id] = p.inn; });
+    await writePfInn(inn);
     const cut = (a) => a.slice(0, 50);
     const last = { at: stamp, by, ok: true, total: people.length, added: cut(report.added), updated: cut(report.updated),
-      left: cut(report.left), returned: cut(report.returned), skipped: report.skipped,
+      left: cut(report.left), returned: cut(report.returned), skipped: report.skipped, innFound: Object.keys(inn).length,
       counts: { added: report.added.length, updated: report.updated.length, left: report.left.length, returned: report.returned.length } };
     await writeKey(LAST, last);
     return last;
