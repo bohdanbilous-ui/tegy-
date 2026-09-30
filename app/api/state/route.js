@@ -7,7 +7,7 @@ import { cleanHours, hoursToAlloc } from "../../../lib/hours";
 
 export const dynamic = "force-dynamic";
 
-const EMPTY = { employees: [], projects: [], partners: [], reasons: [], transfers: [], admins: [], log: [], deleted: {}, pms: {}, codes: {}, projectMeta: {}, teams: [], entries: [], fin: [], settings: { approvalMode: "give" } };
+const EMPTY = { employees: [], projects: [], partners: [], reasons: [], transfers: [], admins: [], log: [], deleted: {}, pms: {}, codes: {}, projectMeta: {}, teams: [], entries: [], fin: [], fpv: [], settings: { approvalMode: "give" } };
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const byId = (list) => new Map((list || []).map((x) => [x.id, x]));
 const newer = (a, b) => (a && a.updatedAt || "") > (b && b.updatedAt || "");
@@ -21,8 +21,8 @@ const newer = (a, b) => (a && a.updatedAt || "") > (b && b.updatedAt || "");
 async function desk(request) {
   const me = await whoIs(request);
   if (me.error) return { res: NextResponse.json({ error: me.error }, { status: 401 }) };
-  if (me.role !== "admin" && me.role !== "hrd") {
-    return { res: NextResponse.json({ error: "Цей розділ доступний адміністратору та HRD." }, { status: 403 }) };
+  if (me.role !== "admin" && me.role !== "hrd" && me.role !== "accountant") {
+    return { res: NextResponse.json({ error: "Цей розділ доступний адміністратору, HRD і бухгалтеру." }, { status: 403 }) };
   }
   return { me };
 }
@@ -33,6 +33,8 @@ function viewFor(state, me) {
   // _now — час сервера: клієнт вирівнює за ним свої позначки часу правок.
   const full = { ...EMPTY, ...state, _persistent: persistent, _view: me.role, _now: nowISO() };
   if (me.role === "admin") return full;
+  // Бухгалтер бачить дані, потрібні для розрахунку тегів і відомостей, але не журнал дій інших.
+  if (me.role === "accountant") return { ...full, log: (state.log || []).filter((l) => sameName(l.who, me.name)) };
   const own = ownTeams(state, me);
   const ownPeople = new Set((state.employees || []).filter((e) => own.has(e.teamId)).map((e) => e.id));
   return {
@@ -41,6 +43,7 @@ function viewFor(state, me) {
     entries: (state.entries || []).filter((x) => ownPeople.has(x.employeeId)),
     log: (state.log || []).filter((l) => sameName(l.who, me.name)),
     fin: [], // місяць для фін. обліку — лише адміністратор
+    fpv: [], // довідник FPV і відомості ЗП — лише адміністратор
   };
 }
 
@@ -94,6 +97,11 @@ function guardHrd(stored, inc, me) {
   inc.settings = stored.settings || {};
   inc.admins = stored.admins || [];
   inc.fin = stored.fin || [];
+  inc.fpv = stored.fpv || [];
+  // Поля відомостей ЗП у картках людей править лише адміністратор.
+  const PAY = ["payType", "payLegal", "payFixed", "payLike", "payOff", "fileType", "fileFixed"];
+  const eStored = byId(stored.employees);
+  (inc.employees || []).forEach((e) => { const o = eStored.get(e.id); if (o) PAY.forEach((k) => { if (k in o) e[k] = o[k]; else delete e[k]; }); });
   inc.log = (inc.log || []).filter((l) => sameName(l.who, me.name));
 
   // Команди: лише свої, і лише подання періоду.
@@ -136,6 +144,31 @@ function guardHrd(stored, inc, me) {
   return null;
 }
 
+/* Правки бухгалтера: усе береться з сервера, крім полів відомостей ЗП у картках людей
+   (юрособа, Штат/Гіг, фіксований розподіл, «тег як у», виключення), довідника FPV
+   і налаштувань відомостей. Додавати людей у загальний довідник не може. Повертає текст помилки або null. */
+function guardAccountant(stored, inc, me) {
+  const incE = byId(inc.employees);
+  const pick = (list, incMap, keys) => (list || []).map((o) => {
+    const n = incMap.get(o.id);
+    if (!n || !newer(n, o)) return o;
+    const out = { ...o, updatedAt: n.updatedAt };
+    keys.forEach((k) => { if (n[k]) out[k] = n[k]; else delete out[k]; });
+    return out;
+  });
+  const known = new Set((stored.employees || []).map((e) => e.id));
+  if ((inc.employees || []).some((e) => !known.has(e.id) && !(stored.deleted || {})["e:" + e.id])) return "додавати людей може лише адміністратор";
+  const keep = { ...stored };
+  keep.employees = pick(stored.employees, incE, ["payLegal", "payType", "payFixed", "payLike", "payOff", "fileFixed", "fileType"]);
+  keep.fpv = inc.fpv || stored.fpv || []; // довідник FPV бухгалтер веде повністю (злиття нижче лишить новіші правки)
+  keep.settings = { ...(stored.settings || {}), pay: (inc.settings && inc.settings.pay) || (stored.settings || {}).pay };
+  const ownLog = (inc.log || []).filter((l) => sameName(l.who, me.name));
+  keep.log = [...ownLog, ...(stored.log || [])];
+  Object.keys(inc).forEach((k) => delete inc[k]);
+  Object.assign(inc, keep);
+  return null;
+}
+
 export async function GET(request) {
   const g = await desk(request);
   if (g.res) return g.res;
@@ -152,6 +185,10 @@ export async function PUT(request) {
   catch (e) { return NextResponse.json({ error: "Некоректний запит." }, { status: 400 }); }
 
   const stored = (await readState()) || EMPTY;
+  if (g.me.role === "accountant") {
+    const why = guardAccountant(stored, incoming, g.me);
+    if (why) return NextResponse.json({ error: why }, { status: 403 });
+  }
   if (g.me.role === "hrd") {
     const why = guardHrd(stored, incoming, g.me);
     if (why) return NextResponse.json({ error: why }, { status: 403 });
