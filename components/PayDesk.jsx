@@ -43,6 +43,9 @@ export function parseFixed(str) {
   return { parts: parts.filter((p) => p.pct > 0), bad };
 }
 const partsText = (parts) => parts.map((p) => p.code + "-" + p.pct).join(",");
+// ПІБ для відомості: вручну → з файлу «Теги ЗП» → з PeopleForce (якщо там є по батькові) → як у довіднику.
+const words3 = (s) => String(s || "").trim().split(/\s+/).filter(Boolean).length >= 3;
+export const fioOf = (e) => e.payFio || e.fileFio || (words3(e.pfFio) ? e.pfFio : "") || e.pfFio || e.name;
 const nameWords = (s) => low(s).replace(/[ʼ'’`]/g, "").replace(/[^a-zа-яіїєґ\s-]+/gi, " ").split(/[\s-]+/).filter((w) => w.length > 1);
 
 function fillTpl(tpl, v) {
@@ -120,7 +123,7 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
       else if (fixedStr) { parts = parseFixed(fixedStr).parts.map((p) => ({ ...p, project: p.code })); source = e.payFixed ? "фікс." : "фікс. з файлу"; notes = []; }
       else { parts = toParts(calc.alloc); source = calc.kind === "довідник" ? "довідник" : "—"; }
       list.push({
-        id: e.id, kind: "emp", name: e.pfFio || e.name, short: e.name, type,
+        id: e.id, kind: "emp", name: fioOf(e), short: e.name, type,
         typeAuto: e.fileType || "",
         legal: e.payLegal || "",
         like: e.payLike || "", off: !!e.payOff, fixed: e.payFixed || "", fileFixed: e.fileFixed || "",
@@ -147,6 +150,7 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
       const badCode = r.parts.filter((p) => p.code && !knownCodes.has(p.code)).map((p) => p.code);
       const prob = [];
       if (!r.type) prob.push("немає типу Штат/Гіг");
+      if (!words3(r.name)) prob.push("ПІБ неповне — немає по батькові");
       if (!r.parts.length) prob.push("немає розподілу");
       if (noCode.length) prob.push("без коду: " + noCode.join(", "));
       if (badCode.length) prob.push("невідомий код: " + badCode.join(", "));
@@ -182,6 +186,13 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
   const edit = (r, patch) => (r.kind === "fpv" ? setF(r.id, patch) : setEmp(r.id, patch));
   const likeId = (name) => { const n = low(name); if (!n) return ""; const r = rows.find((x) => low(x.name) === n || low(x.short) === n); return r ? r.id : null; };
 
+  function askFio(r) {
+    const v = window.prompt("ПІБ повністю для відомості (Прізвище Ім'я По батькові)." + (r.kind === "emp" ? "\nПорожньо — брати з файлу «Теги ЗП» чи PeopleForce." : ""), r.name);
+    if (v === null) return;
+    const t = v.trim().replace(/\s+/g, " ");
+    if (r.kind === "fpv") { if (t) setF(r.id, { name: t }); return; }
+    setEmp(r.id, { payFio: t });
+  }
   async function revealInn(r) {
     if (shownInn[r.id]) return setShownInn((m) => { const n = { ...m }; delete n[r.id]; return n; });
     try { const d = await callPay("GET", null, "?id=" + encodeURIComponent(r.id)); setShownInn((m) => ({ ...m, [r.id]: d.inn || "—" })); }
@@ -260,7 +271,7 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
       setEmployees((p) => p.map((e) => {
         const x = byId.get(e.id);
         if (!x) return e;
-        return { ...e, fileFixed: parseFixed(x.fixed).parts.length ? x.fixed : e.fileFixed || "", fileType: x.type || e.fileType || "", updatedAt: now };
+        return { ...e, fileFixed: parseFixed(x.fixed).parts.length ? x.fixed : e.fileFixed || "", fileType: x.type || e.fileType || "", fileFio: x.name || e.fileFio || "", updatedAt: now };
       }));
     }
     const innItems = [
@@ -283,17 +294,26 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
       (badCount ? "\n\nУ " + badCount + " " + plural(badCount, "рядку", "рядках", "рядках") + " є проблеми — вони підуть зі статусом, щоб їх було видно в таблиці." : "") +
       "\n\nВкладки цих відомостей у таблиці буде повністю перезаписано.";
     if (!window.confirm(msg)) return;
-    const header = ["№", "ПІБ", "ІПН", "Тип", "Юрособа", "Розподіл", "Тег", "Призначення платежу", "Джерело", "Статус"];
+    // Форма — як «Результат ШТАТ / ГІГ» у таблиці «Теги ЗП»: ті самі 7 колонок, окремо на кожну юрособу.
+    const header = ["Співробітник", "ІПН", "Тип", "Годин", "Розподіл по БЮ", "Тег", "Призначення платежу"];
+    const srcLabel = (r) => (r.kind === "fpv" || r.source.startsWith("фікс") ? "фікс." : r.source === "—" ? "" : r.source);
     const tabs = statements.map((s) => ({
-      name: (s.type || "без типу") + " · " + (s.legal || "без юрособи"),
+      name: "Результат " + (s.type === "Гіг" ? "ГІГ" : s.type === "Штат" ? "ШТАТ" : "без типу") + " · " + (s.legal || "без юрособи"),
       header,
-      rows: s.rows.map((r, i) => ({ id: r.id, cells: [i + 1, r.name, "{{ІПН}}", r.type, r.legal, r.tagBody, r.tag, r.purpose, r.source, r.problems.length ? r.problems.join("; ") : "OK"] })),
+      rows: s.rows.map((r) => ({ id: r.id, cells: [r.name, "{{ІПН}}", r.type, "--", r.tagBody ? (srcLabel(r) ? srcLabel(r) + ": " : "") + r.tagBody : "", r.tag, r.purpose] })),
     }));
+    // Окрема вкладка з тим, що треба виправити, — щоб у самих відомостях форма лишалась як була.
+    const bad = included.filter((r) => r.problems.length);
+    tabs.push({
+      name: "Перевірка",
+      header: ["Співробітник", "Відомість", "Що не так"],
+      rows: bad.length ? bad.map((r) => ({ id: r.id, cells: [r.name, r.key, r.problems.join("; ")] })) : [{ id: "", cells: ["Усе гаразд — проблем немає.", "", ""] }],
+    });
     setBusy(true);
     try {
       const d = await callPay("POST", { action: "send", period: perLabel + " · Штат: " + spanText(staffSpan) + " · Гіг: " + spanText(gigSpan), tabs });
-      setSent({ at: new Date().toISOString(), ...d, count: included.length, bad: badCount });
-      setToast("Записано: " + d.tabs + " " + plural(d.tabs, "відомість", "відомості", "відомостей") + (d.noInn ? " · без ІПН: " + d.noInn : "") + ".");
+      setSent({ at: new Date().toISOString(), ...d, tabs: statements.length, count: included.length, bad: badCount });
+      setToast("Записано: " + statements.length + " " + plural(statements.length, "відомість", "відомості", "відомостей") + (d.noInn ? " · без ІПН: " + d.noInn : "") + ".");
       pushLog("вивантажив відомості ЗП у Google Таблицю", perLabel + " · " + statements.length + " відомостей, " + included.length + " людей");
     } catch (e) { setToast("Не вийшло записати: " + e.message); }
     finally { setBusy(false); }
@@ -340,7 +360,7 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
         )}
         {sent && (
           <p style={{ margin: "10px 0 0", background: C.signalSoft, borderRadius: 3, padding: "10px 14px", color: C.signal, fontSize: 12.5 }}>
-            Записано {sent.tabs} {plural(sent.tabs, "відомість", "відомості", "відомостей")} ({sent.count} людей){sent.noInn ? ", без ІПН: " + sent.noInn : ""}{sent.bad ? ", з проблемами: " + sent.bad : ""}.
+            Записано {sent.tabs} {plural(sent.tabs, "відомість", "відомості", "відомостей")} ({sent.count} людей){sent.noInn ? ", без ІПН: " + sent.noInn : ""}{sent.bad ? ", з проблемами: " + sent.bad + " — див. вкладку «Перевірка»" : ""}.
             {sent.url && <> <a href={sent.url} target="_blank" rel="noreferrer" style={{ color: C.signal }}>Відкрити таблицю</a></>}
           </p>
         )}
@@ -409,7 +429,10 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
                     {r.kind === "emp" && openCard
                       ? <button className="link" style={{ color: C.ink, textDecoration: "none", fontWeight: 600, textAlign: "left" }} onClick={() => openCard(r.id)}>{r.name}</button>
                       : <span style={{ fontWeight: 600 }}>{r.name}</span>}
-                    <div style={small}>{r.kind === "fpv" ? "FPV" : r.source}{r.notes && r.notes.length ? " · " + r.notes.join("; ") : ""}</div>
+                    <div style={small}>
+                      {r.kind === "fpv" ? "FPV" : r.source}{r.notes && r.notes.length ? " · " + r.notes.join("; ") : ""}
+                      {canEdit && <> · <button className="link" style={{ fontSize: 11.5 }} onClick={() => askFio(r)}>ПІБ</button></>}
+                    </div>
                     {!r.off && r.problems.length > 0 && <div style={{ fontSize: 11.5, color: C.warn }}>{r.problems.join(" · ")}</div>}
                   </td>
                   <td style={{ padding: 4 }}>
@@ -552,7 +575,7 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
             <p style={{ margin: "6px 0 0" }}>FPV (розподіл лише fpv): <b>{imp.fp.length}</b> — нових {imp.fp.filter((x) => !x.old).length}, оновиться {imp.fp.filter((x) => x.old).length}. ІПН зберігаються окремо — бачать лише адміністратор і бухгалтер.</p>
             <label style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
               <input type="checkbox" checked={imp.withEmp} style={{ width: "auto" }} onChange={(e) => setImp((x) => ({ ...x, withEmp: e.target.checked }))} />
-              Співробітникам, яких знайдено в довіднику ({imp.emp.length}), записати фіксований розподіл (якщо немає табеля) і Штат/Гіг з файлу
+              Співробітникам, яких знайдено в довіднику ({imp.emp.length}), записати ПІБ повністю, фіксований розподіл (якщо немає табеля) і Штат/Гіг з файлу
             </label>
             <label style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
               <input type="checkbox" checked={imp.withInn} style={{ width: "auto" }} onChange={(e) => setImp((x) => ({ ...x, withInn: e.target.checked }))} />
