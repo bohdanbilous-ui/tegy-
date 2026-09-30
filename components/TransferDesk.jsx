@@ -27,15 +27,15 @@ const ROLE_LABEL = { admin: "адміністратор", hrd: "HRD", accountant
 const ALLOWED_DOMAIN = process.env.NEXT_PUBLIC_ALLOWED_DOMAIN || "";
 
 const C = {
-  paper: "#E7ECF4", surface: "#FFFFFF", ink: "#141E38", ink2: "#37456A",
-  muted: "#6F7B99", line: "#C2CDE1", lineSoft: "#DFE5F0",
-  signal: "#0C7480", signalSoft: "#DBEFF0",
-  plan: "#33489E", planSoft: "#E1E6F8",
-  warn: "#8A5510", warnSoft: "#F8EBD6",
-  stop: "#8A2E44", stopSoft: "#F6E2E7",
+  paper: "#F5F7FB", surface: "#FFFFFF", ink: "#0F172A", ink2: "#334155",
+  muted: "#64748B", line: "#DDE3EC", lineSoft: "#EEF2F6",
+  signal: "#2563EB", signalSoft: "#EFF6FF",
+  plan: "#4F46E5", planSoft: "#EEF2FF",
+  warn: "#B45309", warnSoft: "#FFF7ED",
+  stop: "#B91C1C", stopSoft: "#FEF2F2",
 };
-const SERIF = '"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif';
-const SANS = 'ui-sans-serif,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif';
+const SERIF = '"Inter",ui-sans-serif,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif';
+const SANS = '"Inter",ui-sans-serif,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif';
 const MONTHS = ["Січень","Лютий","Березень","Квітень","Травень","Червень","Липень","Серпень","Вересень","Жовтень","Листопад","Грудень"];
 
 const pad = (n) => String(n).padStart(2, "0");
@@ -398,10 +398,33 @@ function decodeJwt(token) {
   return JSON.parse(decodeURIComponent(atob(p).split("").map((c) => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2)).join("")));
 }
 
+/* Іконки бічного меню (контурні, 18px). */
+const ICONS = {
+  moves: "M7 7h13M16 3l4 4-4 4M17 17H4M8 13l-4 4 4 4",
+  sheet: "M4 4h16v16H4zM4 10h16M10 4v16",
+  pay: "M3 6h18v12H3zM3 10h18M7 15h3",
+  snap: "M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z",
+  lists: "M16 19v-1a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v1M9 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM22 19v-1a4 4 0 0 0-3-3.87M16 4.13a3 3 0 0 1 0 5.74",
+  out: "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9",
+  collapse: "M4 4h16v16H4zM9 4v16M16 9l-3 3 3 3",
+  expand: "M4 4h16v16H4zM9 4v16M13 9l3 3-3 3",
+};
+function NavIcon({ name }) {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flex: "none" }}>
+      <path d={ICONS[name] || ""} />
+    </svg>
+  );
+}
+
 export default function TransferDesk() {
   const today = todayISO();
   const [ready, setReady] = useState(false);
   const [tab, setTab] = useState("form");
+  // Бічне меню можна згорнути до смуги з іконками; вибір запам'ятовується в цьому браузері.
+  const [sideMin, setSideMin] = useState(false);
+  useEffect(() => { try { setSideMin(localStorage.getItem("side-min") === "1"); } catch (e) { /* немає сховища */ } }, []);
+  const toggleSide = () => setSideMin((v) => { try { localStorage.setItem("side-min", v ? "0" : "1"); } catch (e) { /* немає сховища */ } return !v; });
   // Остання відкрита вкладка кожного розділу — щоб повертатися туди, де був.
   const lastTab = useRef({});
   useEffect(() => {
@@ -1928,28 +1951,94 @@ export default function TransferDesk() {
 
   const css = `
     .td *, .td *::before, .td *::after { box-sizing: border-box; }
-    .td button, .td input, .td select { font: inherit; color: inherit; }
-    .td :focus-visible { outline: 2px solid ${C.signal}; outline-offset: 2px; border-radius: 2px; }
-    .td input[type="text"], .td input[type="date"], .td input[type="number"], .td select {
+    .td button, .td input, .td select, .td textarea { font: inherit; color: inherit; }
+    .td :focus-visible { outline: 2px solid ${C.signal}; outline-offset: 2px; border-radius: 6px; }
+    .td input[type="text"], .td input[type="date"], .td input[type="number"], .td input[type="password"], .td select, .td textarea {
       width: 100%; background: ${C.surface}; border: 1px solid ${C.line};
-      border-radius: 3px; padding: 9px 10px; color: ${C.ink};
+      border-radius: 8px; padding: 8px 11px; color: ${C.ink}; min-height: 38px; transition: border-color .12s, box-shadow .12s;
     }
+    .td input:focus, .td select:focus, .td textarea:focus { outline: none; border-color: ${C.signal}; box-shadow: 0 0 0 3px ${C.signalSoft}; }
+    .td input:disabled, .td select:disabled { background: #F8FAFC; color: ${C.muted}; }
+    .td button:disabled { opacity: .55; cursor: default !important; }
+    .td h2, .td h3 { letter-spacing: -0.015em; }
+
+    /* оболонка: бічне меню + робоча зона */
+    .td.shell { display: flex; align-items: stretch; }
+    .td .side { width: 240px; flex: none; background: #0B1733; color: #C7D2E4; display: flex; flex-direction: column;
+      position: sticky; top: 0; height: 100vh; padding: 18px 12px; }
+    .td .brand { display: flex; align-items: center; gap: 11px; padding: 4px 8px 22px; }
+    .td .logo { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; font-weight: 700; color: #fff;
+      background: linear-gradient(135deg, #3B82F6, #1D4ED8); box-shadow: 0 4px 12px rgba(37,99,235,.35); }
+    .td .sideNav { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+    .td .sideItem { display: flex; align-items: center; gap: 11px; width: 100%; text-align: left; cursor: pointer; border: none;
+      background: transparent; color: #AEBBD3; padding: 9px 12px; border-radius: 8px; font-size: 14px; font-weight: 500; position: relative; }
+    .td .sideItem:hover { background: rgba(255,255,255,.06); color: #fff; }
+    .td .sideItem.on { background: #17274F; color: #fff; }
+    .td .sideItem.on::before { content: ""; position: absolute; left: -12px; top: 8px; bottom: 8px; width: 3px; border-radius: 0 3px 3px 0; background: #3B82F6; }
+    .td .sideBadge { background: #F59E0B; color: #1F1300; border-radius: 10px; padding: 1px 7px; font-size: 11.5px; font-weight: 700; }
+    .td .sideUser { display: flex; align-items: center; gap: 10px; padding: 12px 8px 4px; border-top: 1px solid rgba(255,255,255,.08); margin-top: 12px; }
+    .td .avatar { width: 32px; height: 32px; border-radius: 50%; background: #1E3A8A; color: #DBEAFE; display: grid; place-items: center; font-size: 12px; font-weight: 700; flex: none; }
+    .td .sideOut { cursor: pointer; background: none; border: none; color: #8A9BB8; padding: 6px; border-radius: 6px; display: grid; place-items: center; }
+    .td .sideOut:hover { color: #fff; background: rgba(255,255,255,.08); }
+    .td .work { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    .td .side { transition: width .18s ease, padding .18s ease; }
+    .td .sideToggle { display: flex; align-items: center; gap: 11px; cursor: pointer; background: none; border: none; color: #8A9BB8;
+      padding: 9px 12px; border-radius: 8px; font-size: 13px; width: 100%; text-align: left; }
+    .td .sideToggle:hover { color: #fff; background: rgba(255,255,255,.06); }
+    .td .sideLabel { white-space: nowrap; overflow: hidden; }
+    .td .side.min { width: 68px; padding-left: 10px; padding-right: 10px; }
+    .td .side.min .sideLabel { display: none; }
+    .td .side.min .brand { padding: 4px 7px 22px; }
+    .td .side.min .sideItem, .td .side.min .sideToggle { justify-content: center; padding: 10px 0; }
+    .td .side.min .sideItem.on::before { left: -10px; }
+    .td .side.min .sideBadge { position: absolute; top: 2px; right: 4px; padding: 0 5px; font-size: 10px; }
+    .td .side.min .sideUser { flex-direction: column; gap: 6px; padding: 12px 0 4px; }
+    .td .topbar { background: ${C.surface}; border-bottom: 1px solid ${C.line}; padding: 16px 28px 0; position: sticky; top: 0; z-index: 5; }
+    .td .topbar > div:first-child { padding-bottom: 14px; }
+    .td .stats { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+    .td .stats span { background: #F1F5F9; border-radius: 999px; padding: 4px 10px; font-size: 12.5px; color: ${C.ink2}; white-space: nowrap; }
+    .td .stats b { font-weight: 700; color: ${C.ink}; margin-right: 2px; }
+    .td .syncBtn { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; background: none; border: 1px solid ${C.line};
+      border-radius: 999px; padding: 5px 11px; font-size: 12.5px; white-space: nowrap; }
+    .td .syncBtn:hover { border-color: #CBD5E1; background: #F8FAFC; }
+    .td .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+    .td .subTabs { display: flex; gap: 22px; overflow-x: auto; scrollbar-width: none; }
+    .td .subTab { cursor: pointer; background: none; border: none; padding: 10px 0 11px; font-size: 14px; color: ${C.muted}; font-weight: 500;
+      border-bottom: 2px solid transparent; white-space: nowrap; }
+    .td .subTab:hover { color: ${C.ink}; }
+    .td .subTab.on { color: ${C.signal}; border-bottom-color: ${C.signal}; font-weight: 600; }
+
     .td .route { display: grid; grid-template-columns: 1fr 132px 1fr; align-items: start; }
     .td .spine { position: relative; display: grid; place-items: center; align-self: stretch; }
     .td .spine::before { content: ""; position: absolute; left: 50%; top: -18px; bottom: -18px; border-left: 1px dashed ${C.line}; }
-    .td .rosterItem:hover { background: #F3F6FB; }
-    .td table { border-collapse: collapse; width: 100%; }
-    .td th, .td td { text-align: left; padding: 10px 12px; vertical-align: middle; }
-    .td th { font-size: 12px; font-weight: 600; color: ${C.muted}; border-bottom: 1px solid ${C.line}; }
+    .td .rosterItem:hover { background: #F8FAFC; }
+    .td table { border-collapse: separate; border-spacing: 0; width: 100%; }
+    .td th, .td td { text-align: left; padding: 10px 14px; vertical-align: middle; }
+    .td th { font-size: 11.5px; font-weight: 600; color: ${C.muted}; text-transform: uppercase; letter-spacing: .04em;
+      background: #F8FAFC; border-bottom: 1px solid ${C.line}; white-space: nowrap; }
     .td td { border-bottom: 1px solid ${C.lineSoft}; font-size: 13.5px; }
-    .td tbody tr:hover td { background: #F5F8FC; }
+    .td tbody tr:hover td { background: #F8FAFC; }
     .td .num { font-variant-numeric: tabular-nums; }
-    .td .del { cursor: pointer; background: none; border: none; color: ${C.muted}; padding: 4px 6px; border-radius: 3px; }
+    .td .del { cursor: pointer; background: none; border: none; color: ${C.muted}; padding: 4px 6px; border-radius: 6px; }
     .td .del:hover { color: ${C.stop}; background: ${C.stopSoft}; }
-    .td .ghost { cursor: pointer; background: none; border: 1px dashed ${C.line}; border-radius: 3px; padding: 8px 12px; color: ${C.ink2}; }
-    .td .ghost:hover { border-color: ${C.signal}; color: ${C.signal}; }
-    .td .link { cursor: pointer; background: none; border: none; padding: 0; color: ${C.signal}; text-decoration: underline; }
+    .td .ghost { cursor: pointer; background: ${C.surface}; border: 1px solid ${C.line}; border-radius: 8px; padding: 8px 13px; color: ${C.ink2}; font-weight: 500; }
+    .td .ghost:hover { border-color: #CBD5E1; background: #F8FAFC; color: ${C.ink}; }
+    .td .link { cursor: pointer; background: none; border: none; padding: 0; color: ${C.signal}; text-decoration: none; font-weight: 500; }
+    .td .link:hover { text-decoration: underline; }
     @media (max-width: 900px) {
+      .td.shell { flex-direction: column; }
+      .td .side { width: 100%; height: auto; position: static; flex-direction: row; align-items: center; padding: 10px 12px; gap: 8px; overflow-x: auto; }
+      .td .brand { padding: 0 8px 0 0; }
+      .td .brand > div { display: none; }
+      .td .sideNav { flex-direction: row; }
+      .td .sideItem { white-space: nowrap; width: auto; }
+      .td .sideItem.on::before { display: none; }
+      .td .sideUser { border: none; margin: 0; padding: 0; }
+      .td .sideUser > div { display: none; }
+      .td .sideToggle { display: none; }
+      .td .side.min { width: 100%; }
+      .td .side.min .sideLabel { display: inline; }
+      .td .topbar { position: static; padding: 14px 16px 0; }
       .td .cols { grid-template-columns: 1fr !important; }
       .td .route { grid-template-columns: 1fr; }
       .td .spine { height: 30px; }
@@ -1958,10 +2047,10 @@ export default function TransferDesk() {
     @media (prefers-reduced-motion: reduce) { .td * { transition: none !important; animation: none !important; } }
   `;
   const label = { fontSize: 12, fontWeight: 600, color: C.muted, marginBottom: 6, display: "block" };
-  const card = { background: C.surface, border: "1px solid " + C.line, borderRadius: 4 };
-  const chip = (on) => ({ cursor: "pointer", padding: "6px 12px", borderRadius: 3, fontSize: 13,
+  const card = { background: C.surface, border: "1px solid " + C.line, borderRadius: 10, boxShadow: "0 1px 2px rgba(15,23,42,.04)" };
+  const chip = (on) => ({ cursor: "pointer", padding: "6px 13px", borderRadius: 999, fontSize: 13,
     border: "1px solid " + (on ? C.ink2 : C.line), background: on ? C.ink : C.surface, color: on ? "#fff" : C.ink2 });
-  const addBtn = { cursor: "pointer", background: C.ink, color: "#fff", border: "none", borderRadius: 3, padding: "9px 16px", whiteSpace: "nowrap" };
+  const addBtn = { cursor: "pointer", background: C.signal, color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontWeight: 600, whiteSpace: "nowrap" };
 
   if (!ready) {
     return <div style={{ background: C.paper, minHeight: "100vh", display: "grid", placeItems: "center", fontFamily: SANS, color: C.muted }}>Завантажуємо журнал переведень…</div>;
@@ -1970,11 +2059,18 @@ export default function TransferDesk() {
   /* ─── ВХІД ──────────────────────────────────────────────────────────── */
   if (!user) {
     return (
-      <div className="td" style={{ background: C.paper, minHeight: "100vh", fontFamily: SANS, color: C.ink, fontSize: 14, display: "grid", placeItems: "center", padding: 24 }}>
+      <div className="td" style={{ background: "linear-gradient(160deg, #0B1733 0%, #16244A 45%, #F5F7FB 45.1%)", minHeight: "100vh", fontFamily: SANS, color: C.ink, fontSize: 14, display: "grid", placeItems: "center", padding: 24 }}>
         <style>{css}</style>
-        <div style={{ ...card, padding: 28, width: "100%", maxWidth: 420 }}>
-          <h1 style={{ margin: 0, fontFamily: SERIF, fontSize: 24, fontWeight: 600 }}>Переведення між проєктами</h1>
-          <p style={{ color: C.ink2, marginTop: 8 }}>Увійдіть під своїм обліковим записом.</p>
+        <div style={{ ...card, padding: 32, width: "100%", maxWidth: 420, boxShadow: "0 20px 50px rgba(15,23,42,.18)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ width: 40, height: 40, borderRadius: 10, display: "grid", placeItems: "center", fontWeight: 700, color: "#fff", fontSize: 18,
+              background: "linear-gradient(135deg, #3B82F6, #1D4ED8)", boxShadow: "0 4px 12px rgba(37,99,235,.35)" }} aria-hidden="true">A</span>
+            <div>
+              <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, letterSpacing: "-0.015em" }}>Allocate</h1>
+              <div style={{ color: C.muted, fontSize: 12.5 }}>переведення · табель · відомості ЗП</div>
+            </div>
+          </div>
+          <p style={{ color: C.ink2, marginTop: 20 }}>Увійдіть під своїм обліковим записом.</p>
 
           <div style={{ marginTop: 20 }}>
             <label style={label} htmlFor="username">Логін</label>
@@ -2027,86 +2123,102 @@ export default function TransferDesk() {
   }
 
   return (
-    <div className="td" style={{ background: C.paper, minHeight: "100vh", fontFamily: SANS, color: C.ink, fontSize: 14 }}>
+    <div className="td shell" style={{ background: C.paper, minHeight: "100vh", fontFamily: SANS, color: C.ink, fontSize: 14 }}>
       <style>{css}</style>
-
-      <header style={{ borderBottom: "1px solid " + C.line, background: C.surface }}>
-        <div style={{ maxWidth: 1200, margin: "0 auto", padding: "18px 24px 0" }}>
-          <div style={{ display: "flex", gap: 20, alignItems: "baseline", flexWrap: "wrap" }}>
-            <h1 style={{ margin: 0, fontFamily: SERIF, fontSize: 26, fontWeight: 600, letterSpacing: "-0.01em" }}>Переведення між проєктами</h1>
-            <div className="num" style={{ display: "flex", gap: 18, color: C.muted, fontSize: 13 }}>
-              <span>цього місяця {counts.month}</span><span>заплановано {counts.planned}</span><span>на двох і більше проєктах {counts.split}</span>
-              {awaiting.length > 0 && <span style={{ color: C.warn }}>без погодження {awaiting.length}</span>}
-              {objected.length > 0 && <span style={{ color: C.stop }}>із запереченням {objected.length}</span>}
-            </div>
-            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10, fontSize: 13 }}>
-              <span style={{ color: C.ink2 }}>{user.name}{user.email ? " · " + user.email : ""}</span>
-              <span style={{ background: C.signalSoft, color: C.signal, borderRadius: 3, padding: "2px 8px", fontSize: 12, fontWeight: 600 }}>{ROLE_LABEL[role]}</span>
-              <button className="link" onClick={() => syncNow(false)} disabled={offline}
-                title={offline ? "Спільне сховище недоступне" : "Оновити дані з спільного сховища"}
-                style={{ color: syncState === "error" ? C.stop : C.muted, textDecoration: "none" }}>
-                {offline ? "лише ця вкладка"
-                  : syncState === "saving" ? "синхронізуємо…"
-                  : syncState === "error" ? "збій синхронізації, спробувати ще"
-                  : syncAt ? "оновлено " + pad(syncAt.getHours()) + ":" + pad(syncAt.getMinutes()) + " ⟳" : "синхронізувати ⟳"}
+      {(() => {
+        /* Навігація: розділи — у бічному меню, вкладки розділу — над сторінкою. */
+        const allowed = (k) => isAcc ? k === "pay" : isAdmin || !["approve", "lists", "fin", "req", "remind", "pay"].includes(k);
+        const TABS = {
+          form: "Нове переведення", journal: "Журнал",
+          approve: "Погодження" + (myPending.length ? " · " + myPending.length : ""),
+          req: "Заявки" + (newRequests.length ? " · " + newRequests.length : ""),
+          teams: "Табель команд", remind: "Нагадування", fin: "Місяць · фін. облік", report: "Звіт по місяцях",
+          snap: "Зріз на дату", lists: "Довідник", pay: "Відомості ЗП",
+        };
+        const SECTIONS = [
+          { k: "moves", label: "Переведення", icon: "moves", tabs: ["form", "journal", "approve", "req"], badge: (isAdmin ? myPending.length + newRequests.length : 0) },
+          { k: "sheet", label: "Табель", icon: "sheet", tabs: ["teams", "remind", "fin", "report"] },
+          { k: "pay", label: "Відомості ЗП", icon: "pay", tabs: ["pay"] },
+          { k: "snap", label: "Зріз на дату", icon: "snap", tabs: ["snap"] },
+          { k: "lists", label: "Довідник", icon: "lists", tabs: ["lists"] },
+        ].map((x) => ({ ...x, tabs: x.tabs.filter(allowed) })).filter((x) => x.tabs.length);
+        const cur = SECTIONS.find((x) => x.tabs.includes(tab)) || SECTIONS[0];
+        const initials = (user.name || "?").split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
+        return (
+          <>
+            <aside className={"side" + (sideMin ? " min" : "")} aria-label="Розділи">
+              <div className="brand">
+                <span className="logo" aria-hidden="true">A</span>
+                <div className="sideLabel">
+                  <div style={{ fontWeight: 700, fontSize: 15, color: "#fff", letterSpacing: "-0.01em" }}>Allocate</div>
+                  <div style={{ fontSize: 11.5, color: "#8A9BB8" }}>переведення · табель · ЗП</div>
+                </div>
+              </div>
+              <nav className="sideNav">
+                {SECTIONS.map((x) => {
+                  const on = x === cur;
+                  return (
+                    <button key={x.k} className={"sideItem" + (on ? " on" : "")} aria-current={on} title={sideMin ? x.label : undefined}
+                      onClick={() => setTab(lastTab.current[x.k] && x.tabs.includes(lastTab.current[x.k]) ? lastTab.current[x.k] : x.tabs[0])}>
+                      <NavIcon name={x.icon} />
+                      <span className="sideLabel" style={{ flex: 1 }}>{x.label}</span>
+                      {x.badge ? <span className="sideBadge">{x.badge}</span> : null}
+                    </button>
+                  );
+                })}
+              </nav>
+              <button className="sideToggle" onClick={toggleSide} aria-label={sideMin ? "Розгорнути меню" : "Згорнути меню"} title={sideMin ? "Розгорнути меню" : "Згорнути меню"}>
+                <NavIcon name={sideMin ? "expand" : "collapse"} />
+                <span className="sideLabel">Згорнути меню</span>
               </button>
-              <button className="link" onClick={signOut}>вийти</button>
-            </div>
-          </div>
-          {(() => {
-            /* Навігація: 4 розділи, у кожному — свої вкладки. */
-            const allowed = (k) => isAcc ? k === "pay" : isAdmin || !["approve", "lists", "fin", "req", "remind", "pay"].includes(k);
-            const TABS = {
-              form: "Нове переведення", journal: "Журнал",
-              approve: "Погодження" + (myPending.length ? " · " + myPending.length : ""),
-              req: "Заявки" + (newRequests.length ? " · " + newRequests.length : ""),
-              teams: "Табель команд", remind: "Нагадування", fin: "Місяць · фін. облік", report: "Звіт по місяцях",
-              snap: "Зріз на дату", lists: "Довідник", pay: "Відомості ЗП",
-            };
-            const SECTIONS = [
-              { k: "moves", label: "Переведення", tabs: ["form", "journal", "approve", "req"], badge: (isAdmin ? myPending.length + newRequests.length : 0) },
-              { k: "sheet", label: "Табель", tabs: ["teams", "remind", "fin", "report"] },
-              { k: "pay", label: "Відомості ЗП", tabs: ["pay"] },
-              { k: "snap", label: "Зріз на дату", tabs: ["snap"] },
-              { k: "lists", label: "Довідник", tabs: ["lists"] },
-            ].map((x) => ({ ...x, tabs: x.tabs.filter(allowed) })).filter((x) => x.tabs.length);
-            const cur = SECTIONS.find((x) => x.tabs.includes(tab)) || SECTIONS[0];
-            const scroll = { display: "flex", gap: 4, overflowX: "auto", flexWrap: "nowrap", scrollbarWidth: "none" };
-            return (
-              <>
-                <nav aria-label="Розділи" style={{ ...scroll, marginTop: 14 }}>
-                  {SECTIONS.map((x) => {
-                    const on = x === cur;
-                    return (
-                      <button key={x.k} onClick={() => setTab(lastTab.current[x.k] && x.tabs.includes(lastTab.current[x.k]) ? lastTab.current[x.k] : x.tabs[0])} aria-current={on}
-                        style={{ cursor: "pointer", background: "none", border: "none", padding: "10px 14px", whiteSpace: "nowrap", fontSize: 15,
-                          color: on ? C.ink : C.muted, fontWeight: on ? 600 : 400,
-                          borderBottom: "2px solid " + (on ? C.signal : "transparent"), marginBottom: -1 }}>
-                        {x.label}
-                        {x.badge ? <span style={{ marginLeft: 6, background: C.warnSoft, color: C.warn, borderRadius: 9, padding: "1px 7px", fontSize: 11.5, fontWeight: 600 }}>{x.badge}</span> : null}
-                      </button>
-                    );
-                  })}
-                </nav>
+              <div className="sideUser">
+                <span className="avatar" aria-hidden="true" title={sideMin ? user.name + " · " + ROLE_LABEL[role] : undefined}>{initials}</span>
+                <div className="sideLabel" style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ color: "#fff", fontWeight: 600, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{user.name}</div>
+                  <div style={{ fontSize: 11.5, color: "#8A9BB8" }}>{ROLE_LABEL[role]}</div>
+                </div>
+                <button className="sideOut" onClick={signOut} title="Вийти" aria-label="Вийти"><NavIcon name="out" /></button>
+              </div>
+            </aside>
+
+            <div className="work">
+              <header className="topbar">
+                <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 12, color: C.muted, fontWeight: 500 }}>{cur.label}</div>
+                    <h1 style={{ margin: "2px 0 0", fontSize: 20, fontWeight: 700, letterSpacing: "-0.015em" }}>{TABS[tab] ? TABS[tab].replace(/ · \d+$/, "") : cur.label}</h1>
+                  </div>
+                  {!isAcc && (
+                    <div className="num stats">
+                      <span><b>{counts.month}</b> цього місяця</span>
+                      <span><b>{counts.planned}</b> заплановано</span>
+                      <span><b>{counts.split}</b> на кількох проєктах</span>
+                      {awaiting.length > 0 && <span style={{ color: C.warn }}><b>{awaiting.length}</b> без погодження</span>}
+                      {objected.length > 0 && <span style={{ color: C.stop }}><b>{objected.length}</b> із запереченням</span>}
+                    </div>
+                  )}
+                  <button className="syncBtn" onClick={() => syncNow(false)} disabled={offline}
+                    title={offline ? "Спільне сховище недоступне" : "Оновити дані зі спільного сховища"}
+                    style={{ color: syncState === "error" ? C.stop : C.muted }}>
+                    <span className="dot" style={{ background: syncState === "error" ? C.stop : syncState === "saving" ? C.warn : "#16A34A" }} />
+                    {offline ? "лише ця вкладка"
+                      : syncState === "saving" ? "синхронізуємо…"
+                      : syncState === "error" ? "збій синхронізації — ще раз"
+                      : syncAt ? "оновлено о " + pad(syncAt.getHours()) + ":" + pad(syncAt.getMinutes()) : "синхронізувати"}
+                  </button>
+                </div>
                 {cur.tabs.length > 1 && (
-                  <nav aria-label={cur.label} style={{ ...scroll, padding: "10px 0 12px", gap: 6 }}>
+                  <nav aria-label={cur.label} className="subTabs">
                     {cur.tabs.map((k) => (
-                      <button key={k} onClick={() => setTab(k)} aria-current={tab === k}
-                        style={{ cursor: "pointer", whiteSpace: "nowrap", borderRadius: 16, padding: "6px 13px", fontSize: 13,
-                          border: "1px solid " + (tab === k ? C.ink : C.line), background: tab === k ? C.ink : C.surface,
-                          color: tab === k ? "#fff" : C.ink2, fontWeight: tab === k ? 600 : 400 }}>{TABS[k]}</button>
+                      <button key={k} onClick={() => setTab(k)} aria-current={tab === k} className={"subTab" + (tab === k ? " on" : "")}>{TABS[k]}</button>
                     ))}
                   </nav>
                 )}
-              </>
-            );
-          })()}
-        </div>
-      </header>
+              </header>
 
-      <main style={{ maxWidth: 1200, margin: "0 auto", padding: 24 }}>
+      <main style={{ maxWidth: 1320, margin: "0 auto", padding: "24px 28px 40px" }}>
         {!persistent && (
-          <p role="alert" style={{ margin: "0 0 18px", background: C.warnSoft, border: "1px solid #E6CFA6", borderRadius: 3, padding: "12px 14px", color: C.warn }}>
+          <p role="alert" style={{ margin: "0 0 18px", background: C.warnSoft, border: "1px solid #FED7AA", borderRadius: 8, padding: "12px 14px", color: C.warn }}>
             Сховище не підключене: сервер тримає дані в пам'яті й втратить їх при перезапуску. Підключіть Redis у Vercel → Storage.
           </p>
         )}
@@ -2114,7 +2226,7 @@ export default function TransferDesk() {
         {/* ── НОВЕ ПЕРЕВЕДЕННЯ ── */}
         {tab === "form" && employees.length === 0 && (
           <section style={{ ...card, padding: 40, textAlign: "center" }}>
-            <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 22, fontWeight: 600 }}>Довідник співробітників порожній</h2>
+            <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 20, fontWeight: 600 }}>Довідник співробітників порожній</h2>
             <p style={{ color: C.ink2, maxWidth: 520, margin: "10px auto 0" }}>
               Залийте вигрузку зі своєї HR-системи — Excel або CSV — і люди з'являться тут разом із посадами та проєктами.
             </p>
@@ -2152,7 +2264,7 @@ export default function TransferDesk() {
 
             <section style={{ ...card, padding: 22 }}>
               {fromRequest && (
-                <div role="status" style={{ margin: "0 0 16px", background: C.signalSoft, border: "1px solid #A9D5D8", borderRadius: 3, padding: "10px 14px", color: C.ink2, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
+                <div role="status" style={{ margin: "0 0 16px", background: C.signalSoft, border: "1px solid #BFDBFE", borderRadius: 8, padding: "10px 14px", color: C.ink2, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
                   <span>
                     Заповнено із заявки від <b>{fromRequest.requester || fromRequest.email}</b>, {fmtDT(fromRequest.submittedAt)}.
                     Перевірте й натисніть «Створити переведення» — заявка позначиться як оброблена.
@@ -2162,27 +2274,27 @@ export default function TransferDesk() {
               )}
               <div style={{ display: "flex", justifyContent: "space-between", gap: 14, flexWrap: "wrap", alignItems: "baseline" }}>
                 <div>
-                  <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 22, fontWeight: 600 }}>{employee?.name || "Оберіть співробітника"}</h2>
+                  <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 20, fontWeight: 600 }}>{employee?.name || "Оберіть співробітника"}</h2>
                   {employee?.position && <p style={{ margin: "3px 0 0", color: C.muted, fontSize: 13 }}>{employee.position}</p>}
                   <p style={{ margin: "4px 0 0", color: C.ink2 }}>Зараз: {allocText(currentAlloc)}</p>
                 </div>
                 {employee && <button className="ghost" onClick={() => setCardId(employee.id)}>Історія переведень</button>}
               </div>
 
-              <div style={{ marginTop: 20, background: "#F4F7FC", border: "1px solid " + C.lineSoft, borderRadius: 4, padding: "20px 18px" }}>
+              <div style={{ marginTop: 20, background: "#F8FAFC", border: "1px solid " + C.lineSoft, borderRadius: 8, padding: "20px 18px" }}>
                 <div className="route" style={{ marginBottom: 10 }}>
                   <span style={{ ...label, margin: 0 }}>Зараз</span><span /><span style={{ ...label, margin: 0 }}>Після переведення</span>
                 </div>
                 <div className="route">
                   <div style={{ display: "grid", gap: 8 }}>
                     {currentAlloc.map((x, i) => (
-                      <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 10, background: C.surface, border: "1px solid " + C.lineSoft, borderRadius: 3, padding: "11px 12px", minHeight: 42 }}>
+                      <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 10, background: C.surface, border: "1px solid " + C.lineSoft, borderRadius: 8, padding: "11px 12px", minHeight: 42 }}>
                         <span>{x.project}</span><span className="num" style={{ color: C.muted }}>{round2(x.percent)}%</span>
                       </div>
                     ))}
                   </div>
                   <div className="spine">
-                    <span className="num" style={{ position: "relative", background: "#F4F7FC", padding: "3px 8px", color: C.signal, fontWeight: 600, fontSize: 12.5, whiteSpace: "nowrap" }}>{fmt(effectiveDate)}</span>
+                    <span className="num" style={{ position: "relative", background: "#F8FAFC", padding: "3px 8px", color: C.signal, fontWeight: 600, fontSize: 12.5, whiteSpace: "nowrap" }}>{fmt(effectiveDate)}</span>
                   </div>
                   <div style={{ display: "grid", gap: 8 }}>
                     {dist.map((r, i) => (
@@ -2233,7 +2345,7 @@ export default function TransferDesk() {
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16, marginTop: 16 }}>
                 <div>
                   <span style={label}>Подає</span>
-                  <div style={{ background: "#F1F4F9", border: "1px solid " + C.lineSoft, borderRadius: 3, padding: "9px 10px", color: C.ink2 }}>{user.name}</div>
+                  <div style={{ background: "#F1F4F9", border: "1px solid " + C.lineSoft, borderRadius: 8, padding: "9px 10px", color: C.ink2 }}>{user.name}</div>
                 </div>
                 <div>
                   <label style={label} htmlFor="reason">Підстава</label>
@@ -2248,19 +2360,19 @@ export default function TransferDesk() {
               </div>
 
               {pending && (
-                <p style={{ marginTop: 16, marginBottom: 0, background: C.warnSoft, border: "1px solid #E6CFA6", borderRadius: 3, padding: "10px 12px", color: C.warn }}>
+                <p style={{ marginTop: 16, marginBottom: 0, background: C.warnSoft, border: "1px solid #FED7AA", borderRadius: 8, padding: "10px 12px", color: C.warn }}>
                   У {employee.name} вже є переведення на {fmt(pending.effectiveDate)} ({allocText(pending.to)}). Скасуйте його в журналі, якщо це заміна.
                 </p>
               )}
               {errors.length > 0 && (
-                <div role="alert" style={{ marginTop: 16, background: C.stopSoft, border: "1px solid #E2BCC6", borderRadius: 3, padding: "12px 14px", color: C.stop }}>
+                <div role="alert" style={{ marginTop: 16, background: C.stopSoft, border: "1px solid #E2BCC6", borderRadius: 8, padding: "12px 14px", color: C.stop }}>
                   <strong style={{ display: "block", marginBottom: 6 }}>Перевірте форму</strong>
                   <ul style={{ margin: 0, paddingLeft: 18 }}>{errors.map((e, i) => <li key={i}>{e}</li>)}</ul>
                 </div>
               )}
 
               <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 20, flexWrap: "wrap" }}>
-                <button onClick={submit} style={{ cursor: "pointer", background: C.signal, color: "#fff", border: "none", borderRadius: 3, padding: "12px 22px", fontWeight: 600 }}>
+                <button onClick={submit} style={{ cursor: "pointer", background: C.signal, color: "#fff", border: "none", borderRadius: 8, padding: "12px 22px", fontWeight: 600 }}>
                   Створити переведення
                 </button>
                 <span style={{ color: C.muted, fontSize: 12.5 }}>Запис піде в журнал за вашим ім'ям і в звіт за {monthLabel(monthKey(effectiveDate || today)).toLowerCase()}.</span>
@@ -2300,7 +2412,7 @@ export default function TransferDesk() {
                   </div>
                 ) : (
                   <div style={{ marginTop: 10, fontSize: 12.5, color: C.ink2, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
-                    <span style={{ background: r.status === "done" ? C.signalSoft : C.stopSoft, color: r.status === "done" ? C.signal : C.stop, borderRadius: 3, padding: "2px 8px", fontWeight: 600 }}>
+                    <span style={{ background: r.status === "done" ? C.signalSoft : C.stopSoft, color: r.status === "done" ? C.signal : C.stop, borderRadius: 999, padding: "2px 9px", fontWeight: 600 }}>
                       {r.status === "done" ? "створено переведення" : "відхилено"}
                     </span>
                     <span>{r.decidedBy}, {fmtDT(r.decidedAt)}{r.comment ? " · " + r.comment : ""}</span>
@@ -2318,7 +2430,7 @@ export default function TransferDesk() {
                   ви перевіряєте й зберігаєте, заявка позначається як оброблена. Автор заявки бачить лише саму форму.
                 </p>
                 {!formReady && (
-                  <p style={{ margin: "10px 0 0", background: C.warnSoft, border: "1px solid #E6CFA6", borderRadius: 3, padding: "10px 12px", color: C.warn }}>
+                  <p style={{ margin: "10px 0 0", background: C.warnSoft, border: "1px solid #FED7AA", borderRadius: 8, padding: "10px 12px", color: C.warn }}>
                     Форма ще не підключена: додайте у Vercel змінну FORM_SECRET (довгий випадковий рядок) і зробіть Redeploy.
                   </p>
                 )}
@@ -2326,7 +2438,7 @@ export default function TransferDesk() {
               {[{ k: "new", title: "Нові", items: fresh, empty: "Нових заявок немає." }, { k: "done", title: "Оброблені", items: done, empty: "Ще нічого не оброблено." }].map((b) => (
                 <section key={b.k} style={{ ...card, overflow: "hidden" }}>
                   <div style={{ padding: "14px 18px" }}>
-                    <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 19, fontWeight: 600 }}>{b.title} <span className="num" style={{ color: C.muted, fontWeight: 400 }}>{b.items.length}</span></h2>
+                    <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>{b.title} <span className="num" style={{ color: C.muted, fontWeight: 400 }}>{b.items.length}</span></h2>
                   </div>
                   {b.items.length ? b.items.map(reqCard) : <p style={{ padding: "0 18px 18px", margin: 0, color: C.muted }}>{b.empty}</p>}
                 </section>
@@ -2351,7 +2463,7 @@ export default function TransferDesk() {
                   {isAdmin ? "Ви адміністратор: можете правити будь-який запис." : "Правити можна лише свої записи; видаляти — тільки адміністратор."}
                 </span>
                 <button onClick={exportJournal} disabled={!journal.length}
-                  style={{ marginLeft: "auto", cursor: journal.length ? "pointer" : "not-allowed", padding: "8px 14px", borderRadius: 3, border: "1px solid " + C.line, background: C.surface, color: journal.length ? C.ink2 : C.muted }}>
+                  style={{ marginLeft: "auto", cursor: journal.length ? "pointer" : "not-allowed", padding: "8px 14px", borderRadius: 8, border: "1px solid " + C.line, background: C.surface, color: journal.length ? C.ink2 : C.muted }}>
                   Вивантажити Excel
                 </button>
               </div>
@@ -2368,35 +2480,37 @@ export default function TransferDesk() {
                         const st = statusOf(t, today);
                         return (
                           <tr key={t.id}>
-                            <td><button className="link" style={{ fontWeight: 600 }} onClick={() => setCardId(t.employeeId)}>{nameOf(t)}</button></td>
-                            <td style={{ color: C.muted }}>{allocText(t.from)}</td>
-                            <td style={{ fontWeight: 600 }}>{allocText(t.to)}</td>
+                            <td style={{ minWidth: 150 }}><button className="link" style={{ fontWeight: 600, textAlign: "left" }} onClick={() => setCardId(t.employeeId)}>{nameOf(t)}</button></td>
+                            <td style={{ color: C.muted, minWidth: 150 }}>{allocText(t.from)}</td>
+                            <td style={{ fontWeight: 600, minWidth: 170 }}>{allocText(t.to)}</td>
                             <td className="num" style={{ whiteSpace: "nowrap" }}>{fmt(t.effectiveDate)}</td>
                             <td className="num" style={{ whiteSpace: "nowrap", color: t.temporary ? C.ink : C.muted }}>{t.temporary ? fmt(t.returnDate) : "постійне"}</td>
-                            <td>{t.reason}{t.note && <div style={{ color: C.muted, fontSize: 12 }}>{t.note}</div>}</td>
-                            <td>{t.partner}
+                            <td style={{ minWidth: 150 }}>{t.reason}{t.note && <div style={{ color: C.muted, fontSize: 12 }}>{t.note}</div>}</td>
+                            <td style={{ minWidth: 130 }}>{t.partner}
                               <div style={{ color: C.muted, fontSize: 12 }}>{fmtDT(t.createdAt)}</div>
                               {t.editedBy && <div style={{ color: C.warn, fontSize: 12 }}>змінив(ла) {t.editedBy}, {fmtDT(t.editedAt)}</div>}
                             </td>
-                            <td><span style={{ background: STATUS[st].bg, color: STATUS[st].fg, borderRadius: 3, padding: "3px 8px", fontSize: 12, fontWeight: 600, whiteSpace: "nowrap" }}>{STATUS[st].label}</span></td>
+                            <td><span style={{ background: STATUS[st].bg, color: STATUS[st].fg, borderRadius: 999, padding: "3px 9px", fontSize: 12, fontWeight: 600, whiteSpace: "nowrap" }}>{STATUS[st].label}</span></td>
                             <td>
                               {(() => {
                                 const ap = approvalState(t, settings.approvalMode);
                                 const req = (t.approvals || []).filter((a) => isRequired(a, settings.approvalMode));
                                 const ok = req.filter((a) => a.status === "approved").length;
                                 return (
-                                  <span style={{ background: APPROVAL[ap].bg, color: APPROVAL[ap].fg, borderRadius: 3, padding: "3px 8px", fontSize: 12, fontWeight: 600, whiteSpace: "nowrap" }}>
+                                  <span style={{ background: APPROVAL[ap].bg, color: APPROVAL[ap].fg, borderRadius: 999, padding: "3px 9px", fontSize: 12, fontWeight: 600, whiteSpace: "nowrap" }}>
                                     {APPROVAL[ap].label}{req.length > 1 ? " " + ok + "/" + req.length : ""}
                                   </span>
                                 );
                               })()}
                             </td>
-                            <td style={{ whiteSpace: "nowrap" }}>
-                              {canCancel(t) && <button className="link" style={{ color: C.ink2, marginRight: 12 }} onClick={() => openEdit(t)}>Змінити</button>}
-                              {canCancel(t)
-                                ? <button className="link" style={{ color: C.ink2, marginRight: 12 }} onClick={() => toggleCancel(t)}>{t.cancelled ? "Відновити" : "Скасувати"}</button>
-                                : <span style={{ color: C.muted, fontSize: 12.5, marginRight: 12 }} title={"Редагувати може " + t.partner + " або адміністратор"}>запис {t.partner}</span>}
-                              {canDelete() && <button className="link" style={{ color: C.stop }} onClick={() => removeTransfer(t)}>Видалити</button>}
+                            <td style={{ whiteSpace: "nowrap", fontSize: 13 }}>
+                              <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
+                                {canCancel(t) && <button className="link" style={{ color: C.ink2 }} onClick={() => openEdit(t)}>Змінити</button>}
+                                {canCancel(t)
+                                  ? <button className="link" style={{ color: C.ink2 }} onClick={() => toggleCancel(t)}>{t.cancelled ? "Відновити" : "Скасувати"}</button>
+                                  : <span style={{ color: C.muted, fontSize: 12.5 }} title={"Редагувати може " + t.partner + " або адміністратор"}>запис {t.partner}</span>}
+                                {canDelete() && <button className="link" style={{ color: C.stop }} onClick={() => removeTransfer(t)}>Видалити</button>}
+                              </div>
                             </td>
                           </tr>
                         );
@@ -2444,7 +2558,7 @@ export default function TransferDesk() {
                   <span style={{ color: C.line }}>→</span>
                   <span style={{ fontWeight: 600 }}>{allocText(t.to)}</span>
                   <span className="num" style={{ color: C.ink2 }}>з {fmt(t.effectiveDate)}</span>
-                  <span style={{ background: STATUS[st].bg, color: STATUS[st].fg, borderRadius: 3, padding: "2px 7px", fontSize: 11.5, fontWeight: 600 }}>{STATUS[st].label}</span>
+                  <span style={{ background: STATUS[st].bg, color: STATUS[st].fg, borderRadius: 8, padding: "2px 7px", fontSize: 11.5, fontWeight: 600 }}>{STATUS[st].label}</span>
                 </div>
                 <div style={{ color: C.muted, fontSize: 12.5, marginTop: 4 }}>
                   {t.reason}{t.note ? " · " + t.note : ""} · подав(ла) {t.partner}, {fmtDT(t.createdAt)}
@@ -2455,7 +2569,7 @@ export default function TransferDesk() {
                   {list.map((a) => {
                     const mine = canDecide(a), key = t.id + ":" + a.project;
                     return (
-                      <div key={a.project} style={{ background: "#F4F7FC", border: "1px solid " + C.lineSoft, borderRadius: 3, padding: "10px 12px" }}>
+                      <div key={a.project} style={{ background: "#F8FAFC", border: "1px solid " + C.lineSoft, borderRadius: 8, padding: "10px 12px" }}>
                         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                           <span style={{ fontWeight: 600 }}>{a.project}</span>
                           <span style={{ color: C.muted, fontSize: 12.5 }}>
@@ -2465,7 +2579,7 @@ export default function TransferDesk() {
                           <span style={{ color: C.muted, fontSize: 12.5 }}>PM: {a.pm || "не призначений"}</span>
                           <span style={{ marginLeft: "auto", background: APPROVAL[a.status === "pending" ? "pending" : a.status === "approved" ? "approved" : "rejected"].bg,
                             color: APPROVAL[a.status === "pending" ? "pending" : a.status === "approved" ? "approved" : "rejected"].fg,
-                            borderRadius: 3, padding: "2px 8px", fontSize: 12, fontWeight: 600 }}>
+                            borderRadius: 999, padding: "2px 9px", fontSize: 12, fontWeight: 600 }}>
                             {a.status === "pending" ? "очікує" : a.status === "approved" ? "погодив(ла) " + a.by : "заперечив(ла) " + a.by}
                           </span>
                         </div>
@@ -2505,7 +2619,7 @@ export default function TransferDesk() {
               {blocks.map((b) => (
                 <section key={b.key} style={{ ...card, overflow: "hidden" }}>
                   <div style={{ padding: "14px 18px" }}>
-                    <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 19, fontWeight: 600 }}>
+                    <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>
                       {b.title} <span className="num" style={{ color: C.muted, fontWeight: 400 }}>{b.items.length}</span>
                     </h2>
                   </div>
@@ -2533,7 +2647,7 @@ export default function TransferDesk() {
                   <button onClick={() => setSnapDate(addMonths(today, 3))} style={chip(snapDate === addMonths(today, 3))}>через квартал</button>
                   <button onClick={() => setSnapDate(addMonths(today, -1))} style={chip(snapDate === addMonths(today, -1))}>місяць тому</button>
                 </div>
-                <button onClick={exportSnapshot} style={{ marginLeft: "auto", cursor: "pointer", padding: "8px 14px", borderRadius: 3, border: "1px solid " + C.line, background: C.surface, color: C.ink2 }}>
+                <button onClick={exportSnapshot} style={{ marginLeft: "auto", cursor: "pointer", padding: "8px 14px", borderRadius: 8, border: "1px solid " + C.line, background: C.surface, color: C.ink2 }}>
                   Вивантажити зріз в Excel
                 </button>
               </div>
@@ -2552,7 +2666,7 @@ export default function TransferDesk() {
                 return (
                   <section key={p} style={{ ...card, padding: 18 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>
-                      <h3 style={{ margin: 0, fontFamily: SERIF, fontSize: 18, fontWeight: 600 }}>{p}</h3>
+                      <h3 style={{ margin: 0, fontFamily: SERIF, fontSize: 16, fontWeight: 600 }}>{p}</h3>
                       <span className="num" style={{ color: C.muted, fontSize: 12.5 }}>{list.length} {plural(list.length, "особа", "особи", "осіб")} · {round2(fte)} {plural(Math.round(fte), "ставка", "ставки", "ставок")}</span>
                     </div>
                     <ul style={{ listStyle: "none", margin: "12px 0 0", padding: 0 }}>
@@ -2575,7 +2689,7 @@ export default function TransferDesk() {
           <div style={{ display: "grid", gap: 20 }}>
             <section style={{ ...card, padding: "16px 20px" }}>
               <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-                <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 21, fontWeight: 600 }}>Табель розподілу</h2>
+                <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>Табель розподілу</h2>
                 <div style={{ display: "flex", gap: 6, alignItems: "center", marginLeft: 8 }}>
                   <button className="ghost" onClick={() => setPeriod((p) => shiftPeriod(p, -1))} aria-label="Попередній період">←</button>
                   <span className="num" style={{ fontWeight: 600, minWidth: 210, textAlign: "center" }}>{periodLabel(period)}</span>
@@ -2584,7 +2698,7 @@ export default function TransferDesk() {
                 {pKey !== periodKey(periodOf(today).y, periodOf(today).m, periodOf(today).half) && (
                   <button className="link" onClick={() => setPeriod(periodOf(today))}>до поточного</button>
                 )}
-                <button onClick={exportTags} style={{ marginLeft: "auto", cursor: "pointer", padding: "8px 14px", borderRadius: 3, border: "1px solid " + C.line, background: C.surface, color: C.ink2 }}>
+                <button onClick={exportTags} style={{ marginLeft: "auto", cursor: "pointer", padding: "8px 14px", borderRadius: 8, border: "1px solid " + C.line, background: C.surface, color: C.ink2 }}>
                   Вивантажити теги
                 </button>
               </div>
@@ -2594,7 +2708,7 @@ export default function TransferDesk() {
                 Тег кожної людини збирається з її рядка.
               </p>
               {noCode.length > 0 && (
-                <p style={{ margin: "12px 0 0", background: C.warnSoft, border: "1px solid #E6CFA6", borderRadius: 3, padding: "10px 12px", color: C.warn }}>
+                <p style={{ margin: "12px 0 0", background: C.warnSoft, border: "1px solid #FED7AA", borderRadius: 8, padding: "10px 12px", color: C.warn }}>
                   Без коду {noCode.length} {plural(noCode.length, "проєкт", "проєкти", "проєктів")} — у тезі вони стануть «?».
                   {isAdmin ? <button className="link" style={{ marginLeft: 8, color: C.warn }} onClick={() => { setTab("lists"); setBook("proj"); }}>Задати коди</button> : " Коди задає адміністратор."}
                 </p>
@@ -2615,7 +2729,7 @@ export default function TransferDesk() {
               return (
                 <section key={t.id} style={{ ...card, overflow: "hidden" }}>
                   <div style={{ padding: "14px 20px", borderBottom: "1px solid " + C.lineSoft, display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
-                    <h3 style={{ margin: 0, fontFamily: SERIF, fontSize: 19, fontWeight: 600 }}>{t.name}</h3>
+                    <h3 style={{ margin: 0, fontFamily: SERIF, fontSize: 16, fontWeight: 600 }}>{t.name}</h3>
                     <span style={{ color: C.muted, fontSize: 12.5 }}>вносить {t.owner || "адміністратор"}</span>
                     {members.length > 0 && (
                       <span className="num" style={{ fontSize: 12.5, color: filledIn(t.id) === members.length ? C.signal : C.warn }}>
@@ -2623,7 +2737,7 @@ export default function TransferDesk() {
                       </span>
                     )}
                     {sub && (
-                      <span style={{ background: C.signalSoft, color: C.signal, borderRadius: 3, padding: "2px 8px", fontSize: 12, fontWeight: 600 }}>
+                      <span style={{ background: C.signalSoft, color: C.signal, borderRadius: 999, padding: "2px 9px", fontSize: 12, fontWeight: 600 }}>
                         подано · {sub.by}, {fmtDT(sub.at)}
                       </span>
                     )}
@@ -2696,14 +2810,14 @@ export default function TransferDesk() {
                                       <>
                                         <input type="number" className="num" min="0" max={MAX_HOURS} step="0.5" value={hoursValue(e.id, c)} disabled={locked}
                                           onChange={(ev) => setHoursCell(e.id, c, ev.target.value)} aria-label={e.name + ", " + c + ", годин"}
-                                          style={{ textAlign: "center", padding: "7px 4px", background: locked ? "#F4F6FA" : C.surface,
+                                          style={{ textAlign: "center", padding: "7px 4px", background: locked ? "#F8FAFC" : C.surface,
                                             border: "1px solid " + (hoursValue(e.id, c) !== "" ? C.line : C.lineSoft) }} />
                                         <div className="num" style={{ textAlign: "center", fontSize: 11, color: C.muted, minHeight: 14 }}>{cellValue(e.id, c) !== "" ? cellValue(e.id, c) + "%" : ""}</div>
                                       </>
                                     ) : (
                                       <input type="number" className="num" min="0" max="100" value={cellValue(e.id, c)} disabled={locked}
                                         onChange={(ev) => setCell(e.id, c, ev.target.value)} aria-label={e.name + ", " + c}
-                                        style={{ textAlign: "center", padding: "7px 4px", background: locked ? "#F4F6FA" : C.surface,
+                                        style={{ textAlign: "center", padding: "7px 4px", background: locked ? "#F8FAFC" : C.surface,
                                           border: "1px solid " + (cellValue(e.id, c) ? C.line : C.lineSoft) }} />
                                     )}
                                   </td>
@@ -2718,13 +2832,13 @@ export default function TransferDesk() {
                             );
                           })}
                           <tr>
-                            <td style={{ position: "sticky", left: 0, background: "#F4F7FC", color: C.muted, fontWeight: 600 }}>Разом по продукту</td>
+                            <td style={{ position: "sticky", left: 0, background: "#F8FAFC", color: C.muted, fontWeight: 600 }}>Разом по продукту</td>
                             {cols.map((c) => (
-                              <td key={c} className="num" style={{ textAlign: "center", background: "#F4F7FC", color: C.ink2 }}>{inHours
+                              <td key={c} className="num" style={{ textAlign: "center", background: "#F8FAFC", color: C.ink2 }}>{inHours
                                 ? round2(members.reduce((a, e) => a + (Number(hoursValue(e.id, c)) || 0), 0)) + " год"
                                 : colTotal(t.id, c) || "—"}</td>
                             ))}
-                            <td colSpan={2} style={{ background: "#F4F7FC" }} />
+                            <td colSpan={2} style={{ background: "#F8FAFC" }} />
                           </tr>
                         </tbody>
                       </table>
@@ -2804,14 +2918,14 @@ export default function TransferDesk() {
           <div style={{ display: "grid", gap: 20 }}>
             <section style={{ ...card, padding: "16px 20px" }}>
               <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-                <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 21, fontWeight: 600 }}>Місяць для фін. обліку</h2>
+                <span style={{ fontWeight: 600, color: C.ink2 }}>Місяць</span>
                 <div style={{ display: "flex", gap: 6, alignItems: "center", marginLeft: 8 }}>
                   <button className="ghost" onClick={() => setFinMonth((m) => stepMonth(m, -1))} aria-label="Попередній місяць">←</button>
                   <span className="num" style={{ fontWeight: 600, minWidth: 150, textAlign: "center" }}>{finLabel(finMonth)}</span>
                   <button className="ghost" onClick={() => setFinMonth((m) => stepMonth(m, 1))} aria-label="Наступний місяць">→</button>
                 </div>
                 {finClosed && (
-                  <span style={{ background: C.signalSoft, color: C.signal, borderRadius: 3, padding: "2px 8px", fontSize: 12, fontWeight: 600 }}>
+                  <span style={{ background: C.signalSoft, color: C.signal, borderRadius: 999, padding: "2px 9px", fontSize: 12, fontWeight: 600 }}>
                     закрито · {finClose.by}, {fmtDT(finClose.at)}
                   </span>
                 )}
@@ -2824,7 +2938,7 @@ export default function TransferDesk() {
                 </select>
                 <button onClick={exportZp} disabled={!finPicked.length}
                   title="Обрані рядки у форматі аркуша «Фіксовані теги» таблиці зарплат"
-                  style={{ cursor: finPicked.length ? "pointer" : "default", padding: "8px 14px", borderRadius: 3,
+                  style={{ cursor: finPicked.length ? "pointer" : "default", padding: "8px 14px", borderRadius: 8,
                     border: "1px solid " + (finPicked.length ? C.line : C.lineSoft), background: C.surface, color: finPicked.length ? C.ink2 : C.muted }}>
                   Теги для ЗП{finPicked.length ? " (" + finPicked.length + ")" : ""}
                 </button>
@@ -2832,7 +2946,7 @@ export default function TransferDesk() {
                   <>
                     <button onClick={() => repRef.current && repRef.current.click()}
                       title="Завантажити місячний звіт годин з таск-менеджера (.xlsx або .csv)"
-                      style={{ cursor: "pointer", padding: "8px 14px", borderRadius: 3, border: "1px solid " + C.line, background: C.surface, color: C.ink2 }}>
+                      style={{ cursor: "pointer", padding: "8px 14px", borderRadius: 8, border: "1px solid " + C.line, background: C.surface, color: C.ink2 }}>
                       Звіт годин
                     </button>
                     <input ref={repRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} aria-label="Файл звіту годин"
@@ -2842,13 +2956,13 @@ export default function TransferDesk() {
                 {zpReady && (
                   <button onClick={sendZp} disabled={!finPicked.length || zpBusy}
                     title="Оновити рядки обраних людей в аркуші «Фіксовані теги» Google Таблиці"
-                    style={{ cursor: finPicked.length && !zpBusy ? "pointer" : "default", padding: "8px 14px", borderRadius: 3,
+                    style={{ cursor: finPicked.length && !zpBusy ? "pointer" : "default", padding: "8px 14px", borderRadius: 8,
                       border: "1px solid " + (finPicked.length ? C.line : C.lineSoft), background: finPicked.length && !zpBusy ? C.signalSoft : C.surface,
                       color: finPicked.length && !zpBusy ? C.signal : C.muted }}>
                     {zpBusy ? "Надсилаю…" : "У Google Таблицю" + (finPicked.length ? " (" + finPicked.length + ")" : "")}
                   </button>
                 )}
-                <button onClick={exportFin} style={{ cursor: "pointer", padding: "8px 14px", borderRadius: 3, border: "1px solid " + C.line, background: C.surface, color: C.ink2 }}>
+                <button onClick={exportFin} style={{ cursor: "pointer", padding: "8px 14px", borderRadius: 8, border: "1px solid " + C.line, background: C.surface, color: C.ink2 }}>
                   Звіт в Excel
                 </button>
               </div>
@@ -2892,19 +3006,19 @@ export default function TransferDesk() {
                 повний місяць усередині проміжку — таким, як його показує фін. облік (з коригуваннями).
               </p>
               {repCount > 0 && (
-                <p style={{ margin: "12px 0 0", background: C.signalSoft, border: "1px solid #B9DCE0", borderRadius: 3, padding: "10px 12px", color: C.signal }}>
+                <p style={{ margin: "12px 0 0", background: C.signalSoft, border: "1px solid #BFDBFE", borderRadius: 8, padding: "10px 12px", color: C.signal }}>
                   Цифри {repCount} {plural(repCount, "людини", "людей", "людей")} взято зі звіту годин
                   {repRec && repRec.file ? " («" + repRec.file + "»)" : ""}{repRec && repRec.updatedBy ? ", завантажив " + repRec.updatedBy : ""}.
                   {isAdmin && !finClosed && <> <button className="link" style={{ color: C.signal }} onClick={dropReport}>прибрати звіт</button></>}
                 </p>
               )}
               {!finClosed && finOpen.length > 0 && (
-                <p style={{ margin: "12px 0 0", background: C.warnSoft, border: "1px solid #E6CFA6", borderRadius: 3, padding: "10px 12px", color: C.warn }}>
+                <p style={{ margin: "12px 0 0", background: C.warnSoft, border: "1px solid #FED7AA", borderRadius: 8, padding: "10px 12px", color: C.warn }}>
                   Не всі періоди подано: {finOpen.map((t) => t.name + " (" + [!t.h1 && "01–15", !t.h2 && "16–" + finDays].filter(Boolean).join(", ") + ")").join("; ")}.
                 </p>
               )}
               {finClosed && finDrift > 0 && (
-                <p style={{ margin: "12px 0 0", background: C.warnSoft, border: "1px solid #E6CFA6", borderRadius: 3, padding: "10px 12px", color: C.warn }}>
+                <p style={{ margin: "12px 0 0", background: C.warnSoft, border: "1px solid #FED7AA", borderRadius: 8, padding: "10px 12px", color: C.warn }}>
                   Після закриття табель змінився в {finDrift} {plural(finDrift, "людини", "людей", "людей")}. У звіті лишаються зафіксовані цифри;
                   щоб перерахувати, відкрийте місяць знову.
                 </p>
@@ -2914,7 +3028,7 @@ export default function TransferDesk() {
                 const ok = n === 0;
                 return (
                   <div style={{ margin: "12px 0 0", background: ok ? C.signalSoft : C.warnSoft, border: "1px solid " + (ok ? "#B9DCE0" : "#E6CFA6"),
-                    borderRadius: 3, padding: "10px 12px", color: ok ? C.signal : C.warn }}>
+                    borderRadius: 8, padding: "10px 12px", color: ok ? C.signal : C.warn }}>
                     <div style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
                       <strong>
                         Google Таблиця · {zpReport.month}: передано {zpReport.done} з {zpReport.total}
@@ -2963,7 +3077,7 @@ export default function TransferDesk() {
             {repFile && repMatch && (
               <section style={{ ...card, padding: "16px 20px" }}>
                 <div style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
-                  <h3 style={{ margin: 0, fontFamily: SERIF, fontSize: 19, fontWeight: 600 }}>Звіт годин: «{repFile.name}»</h3>
+                  <h3 style={{ margin: 0, fontFamily: SERIF, fontSize: 16, fontWeight: 600 }}>Звіт годин: «{repFile.name}»</h3>
                   <span style={{ color: C.muted, fontSize: 12.5 }}>
                     у файлі {repMatch.people.length} {plural(repMatch.people.length, "людина", "людини", "людей")} ·
                     зіставлено {repMatch.ready} · цифри ляжуть у {finLabel(finMonth)}
@@ -3076,7 +3190,7 @@ export default function TransferDesk() {
                                     title={changed ? "за розрахунком: " + (cv === "" ? 0 : cv) : undefined}
                                     onChange={(ev) => setFinCell(r, c, ev.target.value)} aria-label={r.name + ", " + c + ", за місяць"}
                                     style={{ textAlign: "center", padding: "7px 4px",
-                                      background: changed ? C.warnSoft : finClosed ? "#F4F6FA" : C.surface,
+                                      background: changed ? C.warnSoft : finClosed ? "#F8FAFC" : C.surface,
                                       border: "1px solid " + (changed ? "#E6CFA6" : v !== "" ? C.line : C.lineSoft) }} />
                                 </td>
                               );
@@ -3110,15 +3224,15 @@ export default function TransferDesk() {
                         );
                       })}
                       <tr>
-                        <td style={{ background: "#F4F7FC" }} />
-                        <td style={{ position: "sticky", left: 0, background: "#F4F7FC", color: C.muted, fontWeight: 600 }}>Разом, ставок</td>
-                        <td colSpan={2} style={{ background: "#F4F7FC" }} />
+                        <td style={{ background: "#F8FAFC" }} />
+                        <td style={{ position: "sticky", left: 0, background: "#F8FAFC", color: C.muted, fontWeight: 600 }}>Разом, ставок</td>
+                        <td colSpan={2} style={{ background: "#F8FAFC" }} />
                         {finCols.map((c) => (
-                          <td key={c} className="num" style={{ textAlign: "center", background: "#F4F7FC", color: C.ink2 }}>
+                          <td key={c} className="num" style={{ textAlign: "center", background: "#F8FAFC", color: C.ink2 }}>
                             {num2(finShown.reduce((s, r) => s + (Number((r.alloc.find((x) => x.project === c) || {}).percent) || 0) / 100, 0)) || "—"}
                           </td>
                         ))}
-                        <td colSpan={tagOn ? 4 : 3} style={{ background: "#F4F7FC" }} />
+                        <td colSpan={tagOn ? 4 : 3} style={{ background: "#F8FAFC" }} />
                       </tr>
                     </tbody>
                   </table>
@@ -3148,7 +3262,7 @@ export default function TransferDesk() {
             {finLoad.list.length > 0 && (
               <section style={{ ...card, overflow: "hidden" }}>
                 <div style={{ padding: "14px 20px", borderBottom: "1px solid " + C.lineSoft, display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
-                  <h3 style={{ margin: 0, fontFamily: SERIF, fontSize: 19, fontWeight: 600 }}>Навантаження на команди, FTE</h3>
+                  <h3 style={{ margin: 0, fontFamily: SERIF, fontSize: 16, fontWeight: 600 }}>Навантаження на команди, FTE</h3>
                   <span style={{ color: C.muted, fontSize: 12.5 }}>
                     {finLabel(finMonth)} · 1 FTE — одна повна ставка: 40% людини на проєкті = 0,4 FTE. Рахується за всіма людьми місяця, без фільтра й пошуку.
                   </span>
@@ -3183,11 +3297,11 @@ export default function TransferDesk() {
                         </tr>
                       ))}
                       <tr>
-                        <td style={{ position: "sticky", left: 0, background: "#F4F7FC", color: C.muted, fontWeight: 600 }}>Разом</td>
-                        <td className="num" style={{ textAlign: "center", background: "#F4F7FC", color: C.ink2 }}>{finLoad.total.people}</td>
-                        <td className="num" style={{ textAlign: "center", background: "#F4F7FC", fontWeight: 600 }}>{num2(finLoad.total.fte)}</td>
+                        <td style={{ position: "sticky", left: 0, background: "#F8FAFC", color: C.muted, fontWeight: 600 }}>Разом</td>
+                        <td className="num" style={{ textAlign: "center", background: "#F8FAFC", color: C.ink2 }}>{finLoad.total.people}</td>
+                        <td className="num" style={{ textAlign: "center", background: "#F8FAFC", fontWeight: 600 }}>{num2(finLoad.total.fte)}</td>
                         {finLoad.cols.map((c) => (
-                          <td key={c} className="num" style={{ textAlign: "center", background: "#F4F7FC", color: C.ink2 }}>{num2(finLoad.total.proj[c]) || "—"}</td>
+                          <td key={c} className="num" style={{ textAlign: "center", background: "#F8FAFC", color: C.ink2 }}>{num2(finLoad.total.proj[c]) || "—"}</td>
                         ))}
                       </tr>
                     </tbody>
@@ -3205,12 +3319,12 @@ export default function TransferDesk() {
           <div style={{ display: "grid", gap: 20 }}>
             <section style={{ ...card, padding: 22 }}>
               <div style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
-                <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 21, fontWeight: 600 }}>Переведення по місяцях</h2>
+                <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>Переведення по місяцях</h2>
                 <div style={{ display: "flex", gap: 6 }}>
                   {years.map((y) => <button key={y} onClick={() => { setYear(y); setOpenMonth(null); }} aria-pressed={year === y} style={chip(year === y)}>{y}</button>)}
                 </div>
                 <span className="num" style={{ color: C.muted }}>разом за рік: {report.total}</span>
-                <button onClick={exportReport} style={{ marginLeft: "auto", cursor: "pointer", padding: "8px 14px", borderRadius: 3, border: "1px solid " + C.line, background: C.surface, color: C.ink2 }}>
+                <button onClick={exportReport} style={{ marginLeft: "auto", cursor: "pointer", padding: "8px 14px", borderRadius: 8, border: "1px solid " + C.line, background: C.surface, color: C.ink2 }}>
                   Звіт в Excel
                 </button>
               </div>
@@ -3258,7 +3372,7 @@ export default function TransferDesk() {
 
             <div className="cols" style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 20, alignItems: "start" }}>
               <section style={{ ...card, padding: 22 }}>
-                <h2 style={{ margin: "0 0 4px", fontFamily: SERIF, fontSize: 19, fontWeight: 600 }}>Рух по проєктах за {year}</h2>
+                <h2 style={{ margin: "0 0 4px", fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>Рух по проєктах за {year}</h2>
                 <p style={{ margin: "0 0 14px", color: C.muted, fontSize: 12.5 }}>У ставках: людина на 50% дає 0,5.</p>
                 <div style={{ overflowX: "auto" }}>
                   <table>
@@ -3284,7 +3398,7 @@ export default function TransferDesk() {
 
               <div style={{ display: "grid", gap: 20 }}>
                 <section style={{ ...card, padding: 22 }}>
-                  <h2 style={{ margin: "0 0 14px", fontFamily: SERIF, fontSize: 19, fontWeight: 600 }}>Хто подавав за {year}</h2>
+                  <h2 style={{ margin: "0 0 14px", fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>Хто подавав за {year}</h2>
                   {Object.keys(report.ppTotals).length === 0
                     ? <p style={{ color: C.muted, margin: 0 }}>За цей рік ще немає поданих переведень.</p>
                     : <table><thead><tr><th>People Partner</th><th>Переведень</th></tr></thead>
@@ -3292,7 +3406,7 @@ export default function TransferDesk() {
                           <tr key={k}><td>{k}</td><td className="num">{v}</td></tr>))}</tbody></table>}
                 </section>
                 <section style={{ ...card, padding: 22 }}>
-                  <h2 style={{ margin: "0 0 14px", fontFamily: SERIF, fontSize: 19, fontWeight: 600 }}>Підстави за {year}</h2>
+                  <h2 style={{ margin: "0 0 14px", fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>Підстави за {year}</h2>
                   {Object.keys(report.reasons).length === 0
                     ? <p style={{ color: C.muted, margin: 0 }}>Даних поки немає.</p>
                     : <table><thead><tr><th>Підстава</th><th>Переведень</th></tr></thead>
@@ -3307,7 +3421,7 @@ export default function TransferDesk() {
         {/* ── ДОВІДНИК ── */}
         {tab === "lists" && isAdmin && (
           <div style={{ display: "grid", gap: 18 }}>
-            {listNote && <p role="status" style={{ margin: 0, background: C.signalSoft, border: "1px solid #A9D5D8", borderRadius: 3, padding: "10px 14px", color: C.ink2 }}>{listNote}</p>}
+            {listNote && <p role="status" style={{ margin: 0, background: C.signalSoft, border: "1px solid #BFDBFE", borderRadius: 8, padding: "10px 14px", color: C.ink2 }}>{listNote}</p>}
 
             <section style={{ ...card, padding: "6px 6px 0" }}>
               <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
@@ -3316,7 +3430,7 @@ export default function TransferDesk() {
                   ["users", "Користувачі", ""], ["cfg", "Налаштування", ""]].map(([k, l, n]) => (
                   <button key={k} onClick={() => setBook(k)} aria-current={book === k}
                     style={{ cursor: "pointer", border: "none", background: book === k ? C.ink : "transparent",
-                      color: book === k ? "#fff" : C.ink2, padding: "10px 16px", borderRadius: 3, marginBottom: 6,
+                      color: book === k ? "#fff" : C.ink2, padding: "10px 16px", borderRadius: 8, marginBottom: 6,
                       fontWeight: book === k ? 600 : 400 }}>
                     {l} <span className="num" style={{ opacity: 0.7 }}>{n}</span>
                   </button>
@@ -3332,7 +3446,7 @@ export default function TransferDesk() {
                   <section style={{ ...card, padding: 20 }}>
                     <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
                       <div style={{ flex: "1 1 320px" }}>
-                        <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 19, fontWeight: 600 }}>PeopleForce</h2>
+                        <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>PeopleForce</h2>
                         <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>
                           Щоночі (близько 03:00 за Києвом) лише читає PeopleForce: додає нових людей і оновлює статус «працює / звільнений». Ім'я, посаду, команди, розподіл і переведення наявних людей не змінює.
                           Звільнені зникають зі списків, але їхня історія лишається.
@@ -3343,7 +3457,7 @@ export default function TransferDesk() {
                       )}
                     </div>
                     {pf && !pf.configured && (
-                      <p style={{ margin: "12px 0 0", background: C.warnSoft, borderRadius: 3, padding: "10px 14px", color: C.ink2, fontSize: 12.5 }}>
+                      <p style={{ margin: "12px 0 0", background: C.warnSoft, borderRadius: 8, padding: "10px 14px", color: C.ink2, fontSize: 12.5 }}>
                         Не налаштовано. Додайте у Vercel змінну <b>PEOPLEFORCE_API_KEY</b> (PeopleForce → Налаштування → API) і <b>CRON_SECRET</b> для щоденного запуску, потім Redeploy.
                       </p>
                     )}
@@ -3379,7 +3493,7 @@ export default function TransferDesk() {
                   style={{ ...card, padding: 20, borderStyle: dragOver ? "dashed" : "solid", borderColor: dragOver ? C.signal : C.line, background: dragOver ? C.signalSoft : C.surface }}>
                   <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
                     <div style={{ flex: "1 1 320px" }}>
-                      <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 19, fontWeight: 600 }}>Заливка списку</h2>
+                      <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>Заливка списку</h2>
                       <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>
                         Перетягніть сюди Excel або CSV чи оберіть файл. Колонки розпізнаються за шапкою: ім'я одним стовпчиком
                         або «Ім'я» + «Прізвище», а також ідентифікатор, посада, проєкт і відсоток.
@@ -3393,10 +3507,10 @@ export default function TransferDesk() {
                     </div>
                   </div>
 
-                  {importError && <p role="alert" style={{ margin: "14px 0 0", background: C.stopSoft, borderRadius: 3, padding: "12px 14px", color: C.stop }}>{importError}</p>}
+                  {importError && <p role="alert" style={{ margin: "14px 0 0", background: C.stopSoft, borderRadius: 8, padding: "12px 14px", color: C.stop }}>{importError}</p>}
 
                   {preview && (
-                    <div style={{ marginTop: 16, background: "#F4F7FC", border: "1px solid " + C.lineSoft, borderRadius: 3, padding: "16px 18px" }}>
+                    <div style={{ marginTop: 16, background: "#F8FAFC", border: "1px solid " + C.lineSoft, borderRadius: 8, padding: "16px 18px" }}>
                       <p style={{ margin: 0, fontWeight: 600 }}>
                         «{preview.fileName}»: {preview.list.length} співробітників
                         {preview.projects.length ? ", " + preview.projects.length + " проєктів" : ""}
@@ -3406,7 +3520,7 @@ export default function TransferDesk() {
                       {preview.warnings.map((w, i) => <p key={i} style={{ margin: "8px 0 0", color: C.warn, fontSize: 12.5 }}>{w}</p>)}
 
                       {preview.needProject && (
-                        <div style={{ marginTop: 12, background: C.surface, border: "1px solid " + C.lineSoft, borderRadius: 3, padding: "12px 14px" }}>
+                        <div style={{ marginTop: 12, background: C.surface, border: "1px solid " + C.lineSoft, borderRadius: 8, padding: "12px 14px" }}>
                           <p style={{ margin: 0, color: C.warn, fontSize: 12.5 }}>
                             Стовпчика з проєктом у файлі немає. Оберіть, звідки його брати, або зарахуйте всіх на один — далі розведете переведеннями.
                           </p>
@@ -3551,7 +3665,7 @@ export default function TransferDesk() {
             {book === "proj" && (
               <section style={{ ...card, overflow: "hidden" }}>
                 <div style={{ padding: "16px 18px", borderBottom: "1px solid " + C.lineSoft }}>
-                  <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 20, fontWeight: 600 }}>Проєкти</h2>
+                  <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>Проєкти</h2>
                   <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>
                     Порядок у таблиці задає порядок колонок у табелі, фін. обліку, звітах і списках вибору. Неактивний проєкт
                     зникає з вибору для нових переведень, з Google Форми й з колонок табеля, але лишається в історії та звітах.
@@ -3570,7 +3684,7 @@ export default function TransferDesk() {
                       <thead><tr><th style={{ width: 86 }}>Порядок</th><th>Назва</th><th style={{ width: 96 }}>Активний</th><th style={{ width: 130 }}>Код для тегів</th><th style={{ width: 190 }}>PM, який погоджує</th><th style={{ width: 80 }}>Людей</th><th style={{ width: 80 }}>Ставок</th><th style={{ width: 100 }}>Переведень</th><th style={{ width: 44 }} /></tr></thead>
                       <tbody>
                         {orderedProjects.map((p, i) => (
-                          <tr key={p} style={offProject(p) ? { background: "#F4F6FA", color: C.muted } : undefined}>
+                          <tr key={p} style={offProject(p) ? { background: "#F8FAFC", color: C.muted } : undefined}>
                             <td style={{ whiteSpace: "nowrap" }}>
                               <span className="num" style={{ display: "inline-block", width: 20, color: C.muted, fontSize: 12 }}>{i + 1}</span>
                               <button className="del" disabled={i === 0} onClick={() => moveProject(p, -1)} aria-label="Вище" style={{ opacity: i === 0 ? 0.3 : 1 }}>↑</button>
@@ -3612,7 +3726,7 @@ export default function TransferDesk() {
 
             {book === "cfg" && (
               <section style={{ ...card, padding: 22, maxWidth: 720 }}>
-                <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 20, fontWeight: 600 }}>Погодження</h2>
+                <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>Погодження</h2>
                 <p style={{ margin: "6px 0 0", color: C.ink2 }}>
                   Переведення діє з дати незалежно від погодження. Питання лише в тому, чиє підтвердження вважати обов'язковим.
                 </p>
@@ -3623,7 +3737,7 @@ export default function TransferDesk() {
                     return (
                       <button key={k} disabled={!isAdmin}
                         onClick={() => { setSettings((x) => ({ ...x, approvalMode: k })); pushLog("змінив режим погодження", title); }}
-                        style={{ textAlign: "left", cursor: isAdmin ? "pointer" : "default", borderRadius: 3, padding: "14px 16px",
+                        style={{ textAlign: "left", cursor: isAdmin ? "pointer" : "default", borderRadius: 8, padding: "14px 16px",
                           border: "1px solid " + (on ? C.signal : C.line), background: on ? C.signalSoft : C.surface }}>
                         <div style={{ fontWeight: 600, color: on ? C.signal : C.ink }}>{title}</div>
                         <div style={{ color: C.ink2, fontSize: 13, marginTop: 4 }}>{desc}</div>
@@ -3632,7 +3746,7 @@ export default function TransferDesk() {
                   })}
                 </div>
                 {!isAdmin && <p style={{ color: C.muted, fontSize: 12.5, marginTop: 12 }}>Змінювати може адміністратор.</p>}
-                <h2 style={{ margin: "28px 0 0", fontFamily: SERIF, fontSize: 20, fontWeight: 600 }}>Команди і відповідальні</h2>
+                <h2 style={{ margin: "28px 0 0", fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>Команди і відповідальні</h2>
                 <p style={{ margin: "6px 0 0", color: C.ink2 }}>
                   Відповідальний вносить відсотки залученості своєї команди. Люди прикріплюються у «Табель → Табель команд»
                   або колонкою «Команда» в таблиці співробітників. Ім'я відповідального має точно збігатися з іменем його
@@ -3675,7 +3789,7 @@ export default function TransferDesk() {
             {book === "pp" && (
               <section style={{ ...card, overflow: "hidden" }}>
                 <div style={{ padding: "16px 18px", borderBottom: "1px solid " + C.lineSoft }}>
-                  <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 20, fontWeight: 600 }}>People Partners</h2>
+                  <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>People Partners</h2>
                   <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>
                     Список підказок для форми переведень. Це не логіни — керування обліковими записами й ролями тепер у вкладці «Користувачі».
                   </p>
@@ -3709,7 +3823,7 @@ export default function TransferDesk() {
             {book === "reason" && (
               <section style={{ ...card, overflow: "hidden" }}>
                 <div style={{ padding: "16px 18px", borderBottom: "1px solid " + C.lineSoft }}>
-                  <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 20, fontWeight: 600 }}>Підстави переведення</h2>
+                  <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>Підстави переведення</h2>
                   <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>
                     Підказки у формі й розбивка у звіті. Нова підстава, вписана у форму, потрапляє сюди сама.
                   </p>
@@ -3743,6 +3857,10 @@ export default function TransferDesk() {
           Права перевіряються і в інтерфейсі, і на сервері: чуже переведення не збережеться, навіть якщо обійти інтерфейс.
         </p>
       </main>
+            </div>
+          </>
+        );
+      })()}
 
       {/* ── КАРТКА СПІВРОБІТНИКА ── */}
       {cardEmp && (() => {
@@ -3757,7 +3875,7 @@ export default function TransferDesk() {
             <div onClick={(e) => e.stopPropagation()} style={{ ...card, width: "100%", maxWidth: 760, maxHeight: "86vh", overflowY: "auto" }}>
               <div style={{ padding: "20px 22px", borderBottom: "1px solid " + C.lineSoft, display: "flex", justifyContent: "space-between", gap: 14, alignItems: "flex-start" }}>
                 <div>
-                  <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 22, fontWeight: 600 }}>{cardEmp.name}</h2>
+                  <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 20, fontWeight: 600 }}>{cardEmp.name}</h2>
                   {(cardEmp.position || cardEmp.extId) && (
                     <p style={{ margin: "3px 0 0", color: C.muted, fontSize: 13 }}>
                       {cardEmp.position}{cardEmp.position && cardEmp.extId ? " · " : ""}{cardEmp.extId ? "ід " + cardEmp.extId : ""}
@@ -3804,7 +3922,7 @@ export default function TransferDesk() {
                           <span style={{ color: C.muted }}>{allocText(t.from)}</span>
                           <span style={{ color: C.line }}>→</span>
                           <span style={{ fontWeight: 600 }}>{allocText(t.to)}</span>
-                          <span style={{ background: STATUS[st].bg, color: STATUS[st].fg, borderRadius: 3, padding: "2px 7px", fontSize: 11.5, fontWeight: 600 }}>{STATUS[st].label}</span>
+                          <span style={{ background: STATUS[st].bg, color: STATUS[st].fg, borderRadius: 8, padding: "2px 7px", fontSize: 11.5, fontWeight: 600 }}>{STATUS[st].label}</span>
                         </div>
                         <div style={{ color: C.ink2, fontSize: 13, marginTop: 4 }}>{t.reason}{t.note ? " · " + t.note : ""}</div>
                         <div style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>
@@ -3843,7 +3961,7 @@ export default function TransferDesk() {
             style={{ position: "fixed", inset: 0, background: "rgba(20,30,56,.45)", display: "grid", placeItems: "center", padding: 20, zIndex: 25 }}>
             <div onClick={(e) => e.stopPropagation()} style={{ ...card, width: "100%", maxWidth: 620, maxHeight: "88vh", overflowY: "auto" }}>
               <div style={{ padding: "20px 22px", borderBottom: "1px solid " + C.lineSoft }}>
-                <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 21, fontWeight: 600 }}>Змінити переведення</h2>
+                <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>Змінити переведення</h2>
                 <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>
                   {nameOf(t)} · подано {fmtDT(t.createdAt)} · «Було: {allocText(t.from)}» лишається як у момент подання.
                 </p>
@@ -3905,7 +4023,7 @@ export default function TransferDesk() {
                 </div>
 
                 {editErrors.length > 0 && (
-                  <div role="alert" style={{ marginTop: 14, background: C.stopSoft, border: "1px solid #E2BCC6", borderRadius: 3, padding: "12px 14px", color: C.stop }}>
+                  <div role="alert" style={{ marginTop: 14, background: C.stopSoft, border: "1px solid #E2BCC6", borderRadius: 8, padding: "12px 14px", color: C.stop }}>
                     <ul style={{ margin: 0, paddingLeft: 18 }}>{editErrors.map((e, i) => <li key={i}>{e}</li>)}</ul>
                   </div>
                 )}
@@ -3923,7 +4041,7 @@ export default function TransferDesk() {
 
       {toast && (
         <div role="status" style={{ position: "fixed", left: "50%", transform: "translateX(-50%)", bottom: 24,
-          background: C.ink, color: "#fff", padding: "12px 18px", borderRadius: 4, boxShadow: "0 8px 24px rgba(20,30,56,.24)", maxWidth: "90vw", zIndex: 30 }}>{toast}</div>
+          background: C.ink, color: "#fff", padding: "12px 18px", borderRadius: 8, boxShadow: "0 8px 24px rgba(20,30,56,.24)", maxWidth: "90vw", zIndex: 30 }}>{toast}</div>
       )}
     </div>
   );
@@ -3941,9 +4059,9 @@ function UsersBook({ token, me }) {
   const [secret, setSecret] = useState(null);
   const [form, setForm] = useState({ username: "", displayName: "", password: "", role: "owner" });
 
-  const card = { background: C.surface, border: "1px solid " + C.line, borderRadius: 4 };
+  const card = { background: C.surface, border: "1px solid " + C.line, borderRadius: 10, boxShadow: "0 1px 2px rgba(15,23,42,.04)" };
   const label = { fontSize: 12, fontWeight: 600, color: C.muted, marginBottom: 6, display: "block" };
-  const addBtn = { cursor: "pointer", background: C.ink, color: "#fff", border: "none", borderRadius: 3, padding: "9px 16px", whiteSpace: "nowrap" };
+  const addBtn = { cursor: "pointer", background: C.signal, color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontWeight: 600, whiteSpace: "nowrap" };
 
   async function call(method, body, query) {
     const res = await fetch("/api/admin/users" + (query || ""), {
@@ -4010,7 +4128,7 @@ function UsersBook({ token, me }) {
   return (
     <section style={{ ...card, overflow: "hidden" }}>
       <div style={{ padding: "16px 18px", borderBottom: "1px solid " + C.lineSoft }}>
-        <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 20, fontWeight: 600 }}>Користувачі й ролі</h2>
+        <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>Користувачі й ролі</h2>
         <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>
           <b>Адміністратор</b> бачить і править усе. <b>HRD</b> веде табель своєї команди й проводить переведення (правити може лише свої).{" "}
           <b>Відповідальний</b> бачить лише команду, де його ім'я стоїть у полі «Відповідальний за %» (Довідник → Налаштування),
@@ -4019,14 +4137,14 @@ function UsersBook({ token, me }) {
       </div>
 
       {error && (
-        <p role="alert" style={{ margin: "14px 18px 0", background: C.stopSoft, borderRadius: 3, padding: "10px 12px", color: C.stop }}>
+        <p role="alert" style={{ margin: "14px 18px 0", background: C.stopSoft, borderRadius: 8, padding: "10px 12px", color: C.stop }}>
           {error}
         </p>
       )}
       {secret && (
         <div
           role="status"
-          style={{ margin: "14px 18px 0", background: C.warnSoft, border: "1px solid #E6CFA6", borderRadius: 3, padding: "12px 14px", color: C.ink }}
+          style={{ margin: "14px 18px 0", background: C.warnSoft, border: "1px solid #FED7AA", borderRadius: 8, padding: "12px 14px", color: C.ink }}
         >
           <div style={{ fontWeight: 600 }}>Пароль для {secret.displayName}</div>
           <div className="num" style={{ marginTop: 6, fontSize: 15 }}>

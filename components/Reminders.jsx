@@ -6,12 +6,12 @@ import React, { useState, useEffect, useRef } from "react";
    а заплановане завдання розсилає їх у Slack від імені адміністратора протягом години. */
 
 const C = {
-  surface: "#FFFFFF", ink: "#141E38", ink2: "#37456A", muted: "#6F7B99", line: "#C2CDE1", lineSoft: "#DFE5F0",
-  signal: "#0C7480", signalSoft: "#DBEFF0", warn: "#8A5510", warnSoft: "#F8EBD6", stop: "#8A2E44", stopSoft: "#F6E2E7",
+  surface: "#FFFFFF", ink: "#0F172A", ink2: "#334155", muted: "#64748B", line: "#DDE3EC", lineSoft: "#EEF2F6",
+  signal: "#2563EB", signalSoft: "#EFF6FF", warn: "#B45309", warnSoft: "#FFF7ED", stop: "#B91C1C", stopSoft: "#FEF2F2",
 };
-const SERIF = '"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif';
-const card = { background: C.surface, border: "1px solid " + C.line, borderRadius: 4 };
-const addBtn = { cursor: "pointer", background: C.ink, color: "#fff", border: "none", borderRadius: 3, padding: "9px 16px", whiteSpace: "nowrap" };
+const SERIF = '"Inter",ui-sans-serif,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif';
+const card = { background: C.surface, border: "1px solid " + C.line, borderRadius: 10, boxShadow: "0 1px 2px rgba(15,23,42,.04)" };
+const addBtn = { cursor: "pointer", background: C.signal, color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontWeight: 600, whiteSpace: "nowrap" };
 const pad = (n) => String(n).padStart(2, "0");
 const fmtDT = (s) => { const d = new Date(s); return isNaN(d) ? "—" : pad(d.getDate()) + "." + pad(d.getMonth() + 1) + " " + pad(d.getHours()) + ":" + pad(d.getMinutes()); };
 const VARS = ["{ім'я}", "{команда}", "{період}", "{заповнено}", "{бракує}", "{посилання}"];
@@ -78,13 +78,13 @@ export default function Reminders({ getToken, onToast }) {
   return (
     <div style={{ display: "grid", gap: 16 }}>
       {!d.keyReady && (
-        <p role="alert" style={{ margin: 0, background: C.warnSoft, border: "1px solid #E6CFA6", borderRadius: 3, padding: "12px 14px", color: C.warn }}>
+        <p role="alert" style={{ margin: 0, background: C.warnSoft, border: "1px solid #FED7AA", borderRadius: 8, padding: "12px 14px", color: C.warn }}>
           Не налаштовано ключ REMINDER_SECRET у Vercel — без нього черга не розсилається. Автонагадування тим часом надсилає старий текст.
         </p>
       )}
       <section style={{ ...card, padding: 20 }}>
         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-          <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 20, fontWeight: 600 }}>Нагадування</h2>
+          <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>Нагадування</h2>
           <select value={d.periodKey} onChange={(e) => setPeriod(e.target.value)} aria-label="Період" style={{ width: "auto", padding: "7px 9px" }}>
             {[d.current, d.previous].filter(Boolean).map((k) => <option key={k} value={k}>{k === d.current ? "поточний період" : "попередній період"}</option>)}
           </select>
@@ -134,7 +134,7 @@ export default function Reminders({ getToken, onToast }) {
           ))}
         </p>
         <textarea value={text} onChange={(e) => { dirty.current = true; setText(e.target.value); }} rows={11} aria-label="Текст нагадування"
-          style={{ width: "100%", boxSizing: "border-box", font: "inherit", padding: "10px 12px", border: "1px solid " + C.line, borderRadius: 3, resize: "vertical" }} />
+          style={{ width: "100%", boxSizing: "border-box", font: "inherit", padding: "10px 12px", border: "1px solid " + C.line, borderRadius: 8, resize: "vertical" }} />
         <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
           <button style={{ ...addBtn, opacity: changed || dirty.current ? 1 : 0.5 }} disabled={busy} onClick={save}>Зберегти</button>
           <button className="ghost" onClick={() => { dirty.current = true; setText(d.defaultTemplate); }}>Текст за замовчуванням</button>
@@ -143,7 +143,7 @@ export default function Reminders({ getToken, onToast }) {
         {preview && (
           <div style={{ marginTop: 14 }}>
             <div style={{ fontSize: 12, fontWeight: 600, color: C.muted, marginBottom: 6 }}>Так побачить {targets[0].name} (за збереженим текстом)</div>
-            <pre style={{ margin: 0, whiteSpace: "pre-wrap", font: "inherit", fontSize: 13.5, background: "#F4F7FC", border: "1px solid " + C.lineSoft, borderRadius: 3, padding: "12px 14px" }}>{preview}</pre>
+            <pre style={{ margin: 0, whiteSpace: "pre-wrap", font: "inherit", fontSize: 13.5, background: "#F8FAFC", border: "1px solid " + C.lineSoft, borderRadius: 8, padding: "12px 14px" }}>{preview}</pre>
           </div>
         )}
       </section>

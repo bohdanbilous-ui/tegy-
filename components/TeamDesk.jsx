@@ -9,14 +9,14 @@ import { workingOn } from "../lib/people";
 ні переведень, ні довідників. */
 
 const C = {
-  paper: "#E7ECF4", surface: "#FFFFFF", ink: "#141E38", ink2: "#37456A",
-  muted: "#6F7B99", line: "#C2CDE1", lineSoft: "#DFE5F0",
-  signal: "#0C7480", signalSoft: "#DBEFF0",
-  warn: "#8A5510", warnSoft: "#F8EBD6",
-  stop: "#8A2E44", stopSoft: "#F6E2E7",
+  paper: "#F5F7FB", surface: "#FFFFFF", ink: "#0F172A", ink2: "#334155",
+  muted: "#64748B", line: "#DDE3EC", lineSoft: "#EEF2F6",
+  signal: "#2563EB", signalSoft: "#EFF6FF",
+  warn: "#B45309", warnSoft: "#FFF7ED",
+  stop: "#B91C1C", stopSoft: "#FEF2F2",
 };
-const SERIF = '"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif';
-const SANS = 'ui-sans-serif,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif';
+const SERIF = '"Inter",ui-sans-serif,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif';
+const SANS = '"Inter",ui-sans-serif,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif';
 const MONTHS = ["Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень", "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень"];
 
 const pad = (n) => String(n).padStart(2, "0");
@@ -297,36 +297,47 @@ export default function TeamDesk({ user, token, onSignOut }) {
     XLSX.writeFile(wb, "zvit-" + team.name.replace(/[^\p{L}\p{N}]+/gu, "-") + "-" + pKey + ".xlsx");
   }
 
-  const card = { background: C.surface, border: "1px solid " + C.line, borderRadius: 4 };
-  const addBtn = { cursor: "pointer", background: C.ink, color: "#fff", border: "none", borderRadius: 3, padding: "9px 16px", whiteSpace: "nowrap" };
+  const card = { background: C.surface, border: "1px solid " + C.line, borderRadius: 10, boxShadow: "0 1px 2px rgba(15,23,42,.04)" };
+  const addBtn = { cursor: "pointer", background: C.signal, color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontWeight: 600, whiteSpace: "nowrap" };
   const css = `
     .tm *, .tm *::before, .tm *::after { box-sizing: border-box; }
     .tm button, .tm input { font: inherit; color: inherit; }
-    .tm :focus-visible { outline: 2px solid ${C.signal}; outline-offset: 2px; }
-    .tm table { border-collapse: collapse; width: 100%; }
-    .tm th, .tm td { text-align: left; padding: 10px 12px; vertical-align: middle; }
-    .tm th { font-size: 12px; font-weight: 600; color: ${C.muted}; border-bottom: 1px solid ${C.line}; }
+    .tm :focus-visible { outline: 2px solid ${C.signal}; outline-offset: 2px; border-radius: 6px; }
+    .tm table { border-collapse: separate; border-spacing: 0; width: 100%; }
+    .tm th, .tm td { text-align: left; padding: 10px 14px; vertical-align: middle; }
+    .tm th { font-size: 11.5px; font-weight: 600; color: ${C.muted}; text-transform: uppercase; letter-spacing: .04em; background: #F8FAFC; border-bottom: 1px solid ${C.line}; }
     .tm td { border-bottom: 1px solid ${C.lineSoft}; font-size: 13.5px; }
+    .tm tbody tr:hover td { background: #F8FAFC; }
     .tm .num { font-variant-numeric: tabular-nums; }
-    .tm .ghost { cursor: pointer; background: none; border: 1px dashed ${C.line}; border-radius: 3px; padding: 8px 12px; color: ${C.ink2}; }
-    .tm .ghost:hover { border-color: ${C.signal}; color: ${C.signal}; }
-    .tm .link { cursor: pointer; background: none; border: none; padding: 0; color: ${C.signal}; text-decoration: underline; }
-    .tm input[type="number"] { width: 100%; border: 1px solid ${C.line}; border-radius: 3px; }
+    .tm .ghost { cursor: pointer; background: ${C.surface}; border: 1px solid ${C.line}; border-radius: 8px; padding: 8px 13px; color: ${C.ink2}; font-weight: 500; }
+    .tm .ghost:hover { border-color: #CBD5E1; background: #F8FAFC; color: ${C.ink}; }
+    .tm .link { cursor: pointer; background: none; border: none; padding: 0; color: ${C.signal}; text-decoration: none; font-weight: 500; }
+    .tm .link:hover { text-decoration: underline; }
+    .tm input[type="number"] { width: 100%; border: 1px solid ${C.line}; border-radius: 8px; min-height: 36px; }
+    .tm input:focus { outline: none; border-color: ${C.signal}; box-shadow: 0 0 0 3px ${C.signalSoft}; }
+    .tm .bar { background: #0B1733; color: #C7D2E4; }
+    .tm .logo { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; font-weight: 700; color: #fff;
+      background: linear-gradient(135deg, #3B82F6, #1D4ED8); }
   `;
+
 
   return (
     <div className="tm" style={{ background: C.paper, minHeight: "100vh", fontFamily: SANS, color: C.ink, fontSize: 14 }}>
       <style>{css}</style>
-      <header style={{ borderBottom: "1px solid " + C.line, background: C.surface }}>
-        <div style={{ maxWidth: 1200, margin: "0 auto", padding: "18px 24px", display: "flex", gap: 16, alignItems: "baseline", flexWrap: "wrap" }}>
-          <h1 style={{ margin: 0, fontFamily: SERIF, fontSize: 24, fontWeight: 600 }}>Відсотки залученості</h1>
-          <span style={{ color: C.muted, fontSize: 13 }}>доступ лише до вашої команди</span>
-          <div style={{ marginLeft: "auto", display: "flex", gap: 12, alignItems: "center", fontSize: 13 }}>
-            <span style={{ color: C.ink2 }}>{user.name}</span>
-            <span style={{ color: saving === "error" ? C.stop : C.muted }}>
+      <header className="bar">
+        <div style={{ maxWidth: 1200, margin: "0 auto", padding: "14px 24px", display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+          <span className="logo" aria-hidden="true">A</span>
+          <div>
+            <div style={{ color: "#fff", fontWeight: 700, fontSize: 16, letterSpacing: "-0.01em" }}>Allocate <span style={{ color: "#8A9BB8", fontWeight: 500 }}>· відсотки залученості</span></div>
+            <div style={{ fontSize: 12, color: "#8A9BB8" }}>доступ лише до вашої команди</div>
+          </div>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 14, alignItems: "center", fontSize: 13 }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 7, color: saving === "error" ? "#FCA5A5" : "#AEBBD3" }}>
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: saving === "error" ? "#EF4444" : saving === "saving" ? "#F59E0B" : "#22C55E" }} />
               {saving === "saving" ? "зберігаємо…" : saving === "error" ? "не збережено" : "збережено"}
             </span>
-            <button className="link" onClick={onSignOut}>вийти</button>
+            <span style={{ color: "#fff", fontWeight: 600 }}>{user.name}</span>
+            <button className="link" style={{ color: "#AEBBD3" }} onClick={onSignOut}>вийти</button>
           </div>
         </div>
       </header>
@@ -336,7 +347,7 @@ export default function TeamDesk({ user, token, onSignOut }) {
 
         {data && !data.teams.length && (
           <section style={{ ...card, padding: 30 }}>
-            <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 20 }}>За вами поки не закріплено жодної команди</h2>
+            <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 17 }}>За вами поки не закріплено жодної команди</h2>
             <p style={{ color: C.ink2, marginBottom: 0 }}>
               Попросіть адміністратора вписати «{user.name}» у поле «Відповідальний за %» потрібної команди
               (Довідник → Налаштування). Ім'я має збігатися буква в букву.
@@ -352,13 +363,13 @@ export default function TeamDesk({ user, token, onSignOut }) {
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                     {data.teams.map((t) => (
                       <button key={t.id} onClick={() => setTeamId(t.id)} aria-pressed={t.id === teamId}
-                        style={{ cursor: "pointer", padding: "6px 12px", borderRadius: 3, fontSize: 13, border: "1px solid " + (t.id === teamId ? C.ink2 : C.line), background: t.id === teamId ? C.ink : C.surface, color: t.id === teamId ? "#fff" : C.ink2 }}>
+                        style={{ cursor: "pointer", padding: "6px 13px", borderRadius: 999, fontSize: 13, border: "1px solid " + (t.id === teamId ? C.ink2 : C.line), background: t.id === teamId ? C.ink : C.surface, color: t.id === teamId ? "#fff" : C.ink2 }}>
                         {t.name}
                       </button>
                     ))}
                   </div>
                 ) : (
-                  <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 21, fontWeight: 600 }}>{team?.name}</h2>
+                  <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>{team?.name}</h2>
                 )}
                 <div style={{ display: "flex", gap: 6, alignItems: "center", marginLeft: 8 }}>
                   <button className="ghost" onClick={() => setPeriod((p) => shiftPeriod(p, -1))} aria-label="Попередній період">←</button>
@@ -366,7 +377,7 @@ export default function TeamDesk({ user, token, onSignOut }) {
                   <button className="ghost" onClick={() => setPeriod((p) => shiftPeriod(p, 1))} aria-label="Наступний період">→</button>
                 </div>
                 {pKey !== periodKey(periodOf(today)) && <button className="link" onClick={() => setPeriod(periodOf(today))}>до поточного</button>}
-                <button onClick={exportXlsx} style={{ marginLeft: "auto", cursor: "pointer", padding: "8px 14px", borderRadius: 3, border: "1px solid " + C.line, background: C.surface, color: C.ink2 }}>
+                <button onClick={exportXlsx} style={{ marginLeft: "auto", cursor: "pointer", padding: "8px 14px", borderRadius: 8, fontWeight: 500, border: "1px solid " + C.line, background: C.surface, color: C.ink2 }}>
                   Звіт в Excel
                 </button>
               </div>
@@ -386,7 +397,7 @@ export default function TeamDesk({ user, token, onSignOut }) {
                     </span>
                   )}
                   {sub && (
-                    <span style={{ background: C.signalSoft, color: C.signal, borderRadius: 3, padding: "2px 8px", fontSize: 12, fontWeight: 600 }}>
+                    <span style={{ background: C.signalSoft, color: C.signal, borderRadius: 999, padding: "2px 9px", fontSize: 12, fontWeight: 600 }}>
                       подано · {sub.by}, {fmtDT(sub.at)}
                     </span>
                   )}
@@ -440,13 +451,13 @@ export default function TeamDesk({ user, token, onSignOut }) {
                                     <>
                                       <input type="number" className="num" min="0" max={MAX_HOURS} step="0.5" value={hoursValue(m.id, c)} disabled={locked}
                                         onChange={(ev) => setHours(m.id, c, ev.target.value)} aria-label={m.name + ", " + c + ", годин"}
-                                        style={{ textAlign: "center", padding: "7px 4px", background: locked ? "#F4F6FA" : C.surface }} />
+                                        style={{ textAlign: "center", padding: "7px 4px", background: locked ? "#F8FAFC" : C.surface }} />
                                       <div className="num" style={{ textAlign: "center", fontSize: 11, color: C.muted, minHeight: 14 }}>{cellValue(m.id, c) !== "" ? cellValue(m.id, c) + "%" : ""}</div>
                                     </>
                                   ) : (
                                     <input type="number" className="num" min="0" max="100" value={cellValue(m.id, c)} disabled={locked}
                                       onChange={(ev) => setCell(m.id, c, ev.target.value)} aria-label={m.name + ", " + c}
-                                      style={{ textAlign: "center", padding: "7px 4px", background: locked ? "#F4F6FA" : C.surface }} />
+                                      style={{ textAlign: "center", padding: "7px 4px", background: locked ? "#F8FAFC" : C.surface }} />
                                   )}
                                 </td>
                               ))}
@@ -481,7 +492,7 @@ export default function TeamDesk({ user, token, onSignOut }) {
       </main>
 
       {toast && (
-        <div role="status" style={{ position: "fixed", left: "50%", transform: "translateX(-50%)", bottom: 24, background: C.ink, color: "#fff", padding: "12px 18px", borderRadius: 4, boxShadow: "0 8px 24px rgba(20,30,56,.24)", maxWidth: "90vw", zIndex: 30 }}>
+        <div role="status" style={{ position: "fixed", left: "50%", transform: "translateX(-50%)", bottom: 24, background: C.ink, color: "#fff", padding: "12px 18px", borderRadius: 8, boxShadow: "0 8px 24px rgba(20,30,56,.24)", maxWidth: "90vw", zIndex: 30 }}>
           {toast}
         </div>
       )}

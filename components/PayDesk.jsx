@@ -11,12 +11,12 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
 
 const C = {
-  paper: "#E7ECF4", surface: "#FFFFFF", ink: "#141E38", ink2: "#37456A",
-  muted: "#6F7B99", line: "#C2CDE1", lineSoft: "#DFE5F0",
-  signal: "#0C7480", signalSoft: "#DBEFF0", plan: "#33489E", planSoft: "#E1E6F8",
-  warn: "#8A5510", warnSoft: "#F8EBD6", stop: "#8A2E44", stopSoft: "#F6E2E7",
+  paper: "#F5F7FB", surface: "#FFFFFF", ink: "#0F172A", ink2: "#334155",
+  muted: "#64748B", line: "#DDE3EC", lineSoft: "#EEF2F6",
+  signal: "#2563EB", signalSoft: "#EFF6FF", plan: "#4F46E5", planSoft: "#EEF2FF",
+  warn: "#B45309", warnSoft: "#FFF7ED", stop: "#B91C1C", stopSoft: "#FEF2F2",
 };
-const SERIF = '"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif';
+const SERIF = '"Inter",ui-sans-serif,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif';
 const MONTHS = ["Січень","Лютий","Березень","Квітень","Травень","Червень","Липень","Серпень","Вересень","Жовтень","Листопад","Грудень"];
 const MONTHS_GEN = ["січня","лютого","березня","квітня","травня","червня","липня","серпня","вересня","жовтня","листопада","грудня"];
 const pad = (n) => String(n).padStart(2, "0");
@@ -320,8 +320,8 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
   }
 
   /* ─── вигляд ─── */
-  const card = { background: C.surface, border: "1px solid " + C.line, borderRadius: 4 };
-  const btn = (on) => ({ cursor: on ? "pointer" : "default", padding: "8px 14px", borderRadius: 3, border: "1px solid " + (on ? C.line : C.lineSoft), background: C.surface, color: on ? C.ink2 : C.muted });
+  const card = { background: C.surface, border: "1px solid " + C.line, borderRadius: 10, boxShadow: "0 1px 2px rgba(15,23,42,.04)" };
+  const btn = (on) => ({ cursor: on ? "pointer" : "default", padding: "8px 14px", borderRadius: 8, fontWeight: 500, border: "1px solid " + (on ? C.line : C.lineSoft), background: C.surface, color: on ? C.ink2 : C.muted });
   const chip = (on) => ({ cursor: "pointer", whiteSpace: "nowrap", borderRadius: 16, padding: "5px 12px", fontSize: 12.5,
     border: "1px solid " + (on ? C.ink : C.line), background: on ? C.ink : C.surface, color: on ? "#fff" : C.ink2 });
   const small = { fontSize: 11.5, color: C.muted };
@@ -332,7 +332,7 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
 
       <section style={{ ...card, padding: "16px 20px" }}>
         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-          <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 21, fontWeight: 600 }}>Відомості ЗП</h2>
+          <span style={{ fontWeight: 600, color: C.ink2 }}>Період</span>
           <div style={{ display: "flex", gap: 6, alignItems: "center", marginLeft: 8 }}>
             <button className="ghost" aria-label="Попередній місяць" onClick={() => setPer((p) => { const i = p.y * 12 + p.m - 2; return { ...p, y: Math.floor(i / 12), m: (i % 12) + 1 }; })}>←</button>
             <span className="num" style={{ fontWeight: 600, minWidth: 130, textAlign: "center" }}>{perLabel}</span>
@@ -354,18 +354,18 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
           Юрособа, Штат/Гіг і ІПН задаються тут (або імпортом з таблиці «Теги ЗП»); ПІБ повністю приходить із PeopleForce.
         </p>
         {!sheetReady && (
-          <p style={{ margin: "10px 0 0", background: C.warnSoft, borderRadius: 3, padding: "10px 14px", color: C.ink2, fontSize: 12.5 }}>
+          <p style={{ margin: "10px 0 0", background: C.warnSoft, borderRadius: 8, padding: "10px 14px", color: C.ink2, fontSize: 12.5 }}>
             Google Таблицю не підключено: встановіть скрипт з <b>apps-script/vidomosti.gs</b> у таблицю відомостей і задайте у Vercel <b>PAY_SHEET_URL</b>, потім Redeploy.
           </p>
         )}
         {sent && (
-          <p style={{ margin: "10px 0 0", background: C.signalSoft, borderRadius: 3, padding: "10px 14px", color: C.signal, fontSize: 12.5 }}>
+          <p style={{ margin: "10px 0 0", background: C.signalSoft, borderRadius: 8, padding: "10px 14px", color: C.signal, fontSize: 12.5 }}>
             Записано {sent.tabs} {plural(sent.tabs, "відомість", "відомості", "відомостей")} ({sent.count} людей){sent.noInn ? ", без ІПН: " + sent.noInn : ""}{sent.bad ? ", з проблемами: " + sent.bad + " — див. вкладку «Перевірка»" : ""}.
             {sent.url && <> <a href={sent.url} target="_blank" rel="noreferrer" style={{ color: C.signal }}>Відкрити таблицю</a></>}
           </p>
         )}
         {showTpl && (
-          <div style={{ marginTop: 14, display: "grid", gap: 12, background: "#F4F7FC", border: "1px solid " + C.lineSoft, borderRadius: 3, padding: "14px 16px" }}>
+          <div style={{ marginTop: 14, display: "grid", gap: 12, background: "#F8FAFC", border: "1px solid " + C.lineSoft, borderRadius: 8, padding: "14px 16px" }}>
             <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
               <label style={{ fontSize: 12.5 }}>Теги Штату за{" "}
                 <select value={staffSpan} onChange={(e) => setPay({ staffSpan: e.target.value })} style={{ width: "auto" }}>
@@ -500,7 +500,7 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
 
       <section style={{ ...card, padding: "16px 20px" }}>
         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-          <h3 style={{ margin: 0, fontFamily: SERIF, fontSize: 19, fontWeight: 600 }}>Довідник юросіб</h3>
+          <h3 style={{ margin: 0, fontFamily: SERIF, fontSize: 16, fontWeight: 600 }}>Довідник юросіб</h3>
           <span style={{ color: C.muted, fontSize: 12.5 }}>з цього списку обирається юрособа людини; кожна юрособа — окремі відомості Штат і Гіг</span>
         </div>
         {legalBook.length === 0 ? (
@@ -563,14 +563,14 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
 
       <section style={{ ...card, padding: "16px 20px" }}>
         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-          <h3 style={{ margin: 0, fontFamily: SERIF, fontSize: 19, fontWeight: 600 }}>Довідник FPV</h3>
+          <h3 style={{ margin: 0, fontFamily: SERIF, fontSize: 16, fontWeight: 600 }}>Довідник FPV</h3>
           <span style={{ color: C.muted, fontSize: 12.5 }}>окремі люди поза PeopleForce; у відомості йдуть разом з усіма, розподіл за замовчуванням fpv-100</span>
           {canEdit && <button onClick={() => fileRef.current && fileRef.current.click()} style={{ ...btn(true), marginLeft: "auto" }}>Імпорт з таблиці «Теги ЗП»</button>}
           <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} aria-label="Файл з аркушем «Співробітники»"
             onChange={(e) => { const f = e.target.files && e.target.files[0]; if (f) readFile(f); e.target.value = ""; }} />
         </div>
         {imp && (
-          <div style={{ marginTop: 14, background: "#F4F7FC", border: "1px solid " + C.lineSoft, borderRadius: 3, padding: "14px 16px", fontSize: 13 }}>
+          <div style={{ marginTop: 14, background: "#F8FAFC", border: "1px solid " + C.lineSoft, borderRadius: 8, padding: "14px 16px", fontSize: 13 }}>
             <p style={{ margin: 0, fontWeight: 600 }}>«{imp.file}», аркуш «{imp.sheet}»</p>
             <p style={{ margin: "6px 0 0" }}>FPV (розподіл лише fpv): <b>{imp.fp.length}</b> — нових {imp.fp.filter((x) => !x.old).length}, оновиться {imp.fp.filter((x) => x.old).length}. ІПН зберігаються окремо — бачать лише адміністратор і бухгалтер.</p>
             <label style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
