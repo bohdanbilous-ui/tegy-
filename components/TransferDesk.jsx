@@ -428,6 +428,8 @@ export default function TransferDesk() {
   const [finTeam, setFinTeam] = useState("all");
   const [finQuery, setFinQuery] = useState("");
   const [finPick, setFinPick] = useState({});
+  // За який проміжок брати теги для ЗП: month — зведено за місяць, h1/h2 — половини, custom — свої дати.
+  const [tagRange, setTagRange] = useState({ mode: "month", from: "", to: "" });
   const [repFile, setRepFile] = useState(null);
   const [repPick, setRepPick] = useState({ p: {}, e: {} });
   const repRef = useRef(null);
@@ -1299,6 +1301,95 @@ export default function TransferDesk() {
   const finOpen = finData.pending.filter((t) => !t.h1 || !t.h2);
   const finDrift = finRows.filter((r) => r.drift).length;
 
+  /* ─── теги за проміжок ──────────────────────────────────────────────────
+     Замість зведеного місяця теги можна взяти за будь-який відрізок дат.
+     Кожен день важить однаково. Повний місяць усередині відрізка береться так,
+     як його показує фін. облік (закритий знімок → коригування → розрахунок).
+     Частина місяця — по днях: звіт годин (він місячний) → половина табеля,
+     куди потрапляє день (порожня — береться інша) → переведення. */
+  const tagSpan = (() => {
+    const mS = monthKeyOf(finMonth.y, finMonth.m) + "-01", mE = lastDayISO(finMonth.y, finMonth.m);
+    if (tagRange.mode === "h1") return { from: mS, to: finKey + "-15" };
+    if (tagRange.mode === "h2") return { from: finKey + "-16", to: mE };
+    if (tagRange.mode === "custom") return { from: tagRange.from || mS, to: tagRange.to || mE };
+    return { from: mS, to: mE };
+  })();
+  const tagOn = tagRange.mode !== "month";
+  const tagSpanBad = tagOn && (!/^\d{4}-\d{2}-\d{2}$/.test(tagSpan.from) || !/^\d{4}-\d{2}-\d{2}$/.test(tagSpan.to) ||
+    tagSpan.from > tagSpan.to || daysBetween(tagSpan.from, tagSpan.to) > 366);
+  const tagSpanLabel = tagRange.mode === "h1" ? "01–15 " + finLabel(finMonth).toLowerCase()
+    : tagRange.mode === "h2" ? "16–" + finDays + " " + finLabel(finMonth).toLowerCase()
+    : fmt(tagSpan.from) + "–" + fmt(tagSpan.to);
+
+  const tagByRange = useMemo(() => {
+    const out = new Map();
+    if (!tagOn || tagSpanBad) return out;
+    const inTeam = (e) => !!(e.teamId && teams.some((t) => t.id === e.teamId));
+    const live = (list) => asAlloc(list).filter((r) => r.percent > 0);
+    const repOf = (mk, id) => {
+      const rec = fin.find((x) => x.id === "fr_" + mk);
+      const row = ((rec && rec.rows) || []).find((r) => r.e === id);
+      return row ? live((row.a || []).map(([project, percent]) => ({ project, percent }))) : null;
+    };
+    // Відрізок ріжемо на шматки по місяцях.
+    const segs = [];
+    for (let d = tagSpan.from; d <= tagSpan.to;) {
+      const y = +d.slice(0, 4), m = +d.slice(5, 7), end = lastDayISO(y, m);
+      const to = end < tagSpan.to ? end : tagSpan.to;
+      segs.push({ y, m, mk: monthKeyOf(y, m), from: d, to, full: d.endsWith("-01") && to === end });
+      d = plusDays(to, 1);
+    }
+    const trBy = new Map();
+    transfers.forEach((t) => { if (!trBy.has(t.employeeId)) trBy.set(t.employeeId, []); trBy.get(t.employeeId).push(t); });
+    finRows.forEach((row) => {
+      const e = employees.find((x) => x.id === row.id);
+      if (!e) return;
+      const tr = trBy.get(e.id) || [];
+      const raw = new Map(), notes = new Set();
+      let days = 0;
+      const add = (alloc, w) => { alloc.forEach((r) => raw.set(r.project, (raw.get(r.project) || 0) + r.percent * w)); days += w; };
+      segs.forEach((s) => {
+        const list = dayList(s.from, s.to).filter((d) => (!e.hiredOn || d >= e.hiredOn) && (!e.leftOn || d <= e.leftOn));
+        if (!list.length) return;
+        const k1 = periodKey(s.y, s.m, 1), k2 = periodKey(s.y, s.m, 2);
+        const a1 = live(allocIn(e.id, k1)), a2 = live(allocIn(e.id, k2));
+        const sheet = inTeam(e) || a1.length > 0 || a2.length > 0;
+        const rep = repOf(s.mk, e.id);
+        if (s.full) {
+          // Повний місяць — рівно те, що показує фін. облік за цей місяць.
+          const close = fin.find((x) => x.id === "fc_" + s.mk);
+          const snap = close && close.closed && (close.rows || []).find((x) => x.e === e.id);
+          const ov = fin.find((x) => x.id === "fo_" + s.mk + "_" + e.id);
+          const alloc = snap ? live((snap.a || []).map(([project, percent]) => ({ project, percent })))
+            : ov && ov.alloc ? live(ov.alloc)
+            : rep || (sheet ? mergeHalves(a1, a2, lastDay(s.y, s.m)) : blendAlloc(e, tr, s.from, s.to));
+          if (alloc.length) add(alloc, list.length); else notes.add("немає даних за " + finLabel(s).toLowerCase());
+          if (snap) notes.add(finLabel(s).toLowerCase() + " — із закритого місяця");
+          else if (ov && ov.alloc) notes.add(finLabel(s).toLowerCase() + " — з коригуванням");
+          return;
+        }
+        if (rep) { add(rep, list.length); notes.add("звіт годин за " + finLabel(s).toLowerCase() + " місячний — узято його"); return; }
+        list.forEach((d) => {
+          if (!sheet) return add(live(allocAt(e, tr, d)), 1);
+          const half = +d.slice(8, 10) <= 15 ? 1 : 2;
+          const own = half === 1 ? a1 : a2, other = half === 1 ? a2 : a1;
+          if (own.length) return add(own, 1);
+          if (other.length) { notes.add((half === 1 ? "01–15" : "16–" + lastDay(s.y, s.m)) + " не заповнено — взято іншу половину"); return add(other, 1); }
+          notes.add("немає даних за частину днів");
+        });
+      });
+      const alloc = days ? roundAlloc(new Map([...raw].map(([p, v]) => [p, v / days]))) : [];
+      out.set(row.id, { alloc, tag: tagOf(alloc, codes), note: [...notes].join("; ") });
+    });
+    return out;
+  }, [tagOn, tagSpanBad, tagSpan.from, tagSpan.to, finRows, employees, entries, teams, fin, transfers, codes]);
+  // Рядок для вивантаження: за місяць — як є, за проміжок — із перерахованим розподілом.
+  const tagRow = (r) => {
+    if (!tagOn) return r;
+    const x = tagByRange.get(r.id) || { alloc: [], tag: "" };
+    return { ...r, alloc: x.alloc, tag: x.tag };
+  };
+
   function setFinRecord(empId, patch) {
     if (!isAdmin) return denied("коригувати місяць для фін. обліку може лише адміністратор");
     if (finClosed) return setToast("Місяць закрито — спершу відкрийте його.");
@@ -1475,8 +1566,9 @@ export default function TransferDesk() {
   }
   function exportZp() {
     if (!finPicked.length) return setToast("Позначте галочками, чиї теги вивантажити.");
-    const rows = finPicked.map(zpRow);
-    downloadXlsx("tegy-zp-" + finKey + ".xlsx", [
+    if (tagSpanBad) return setToast("Перевірте дати проміжку: початок не пізніше кінця, не довше року.");
+    const rows = finPicked.map(tagRow).map(zpRow);
+    downloadXlsx("tegy-zp-" + (tagOn ? tagSpan.from + "_" + tagSpan.to : finKey) + ".xlsx", [
       { name: "Фіксовані теги", freeze: 1, cols: [34, ...CODES.map(() => 9), 34, 22],
         rows: [["Співробітник", ...CODES.map((c) => c + " %"), "Тег (авто)", "Статус"],
           ...rows.map((r) => [r.name, ...CODES.map((c) => (r.pct[c] ? r.pct[c] : "")), r.tag, r.status])] },
@@ -1494,16 +1586,19 @@ export default function TransferDesk() {
   }
   async function sendZp() {
     if (!finPicked.length) return setToast("Позначте галочками, чиї теги надіслати.");
+    if (tagSpanBad) return setToast("Перевірте дати проміжку: початок не пізніше кінця, не довше року.");
+    const spanText = tagOn ? tagSpanLabel : finLabel(finMonth).toLowerCase() + " (зведено за місяць)";
     if (!window.confirm("Оновити теги в Google Таблиці для " + finPicked.length + " " +
-      plural(finPicked.length, "людини", "людей", "людей") + "? Попередні значення в їхніх рядках буде замінено.")) return;
+      plural(finPicked.length, "людини", "людей", "людей") + " за " + spanText + "? Попередні значення в їхніх рядках буде замінено.")) return;
     // Рядки без жодного відсотка з кодом передавати нема чого — їх не шлемо, а одразу показуємо в підсумку.
-    const all = finPicked.map((r) => ({ r, z: zpRow(r) }));
+    const all = finPicked.map((r) => ({ r: tagRow(r), z: zpRow(tagRow(r)) }));
+    const zpLabel = tagOn ? tagSpanLabel : finLabel(finMonth);
     const empty = all.filter((x) => !Object.keys(x.z.pct).length);
     const send = all.filter((x) => Object.keys(x.z.pct).length);
     const skipped = empty.map((x) => ({ id: x.r.id, name: x.r.name, team: x.r.team,
       reason: x.r.alloc.length ? x.z.status : "немає даних — нема чого передати" }));
     if (!send.length) {
-      setZpReport({ at: nowISO(), month: finLabel(finMonth), total: all.length, done: 0, missing: skipped, other: [], unknown: 0 });
+      setZpReport({ at: nowISO(), fk: finKey, month: zpLabel, total: all.length, done: 0, missing: skipped, other: [], unknown: 0 });
       return setToast("Нічого не надіслано: в обраних людей немає тегів із кодами.");
     }
     setZpBusy(true);
@@ -1511,7 +1606,7 @@ export default function TransferDesk() {
       const res = await fetch("/api/zp-sheet", {
         method: "POST", cache: "no-store",
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + tokenRef.current },
-        body: JSON.stringify({ rows: send.map((x) => x.z) }),
+        body: JSON.stringify({ rows: send.map((x) => x.z), period: { from: tagSpan.from, to: tagSpan.to, label: zpLabel, byMonth: !tagOn } }),
       });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(d.error || "HTTP " + res.status);
@@ -1528,16 +1623,16 @@ export default function TransferDesk() {
       const other = bad.filter((p, k) => !used.has(k));
       const unknown = Math.max(0, send.length - done - failed.length - other.length);
       const missing = [...failed, ...skipped];
-      setZpReport({ at: nowISO(), month: finLabel(finMonth), total: all.length, done, missing, other, unknown });
+      setZpReport({ at: nowISO(), fk: finKey, month: zpLabel, total: all.length, done, missing, other, unknown });
       const notSent = missing.length + other.length + unknown;
       setToast("Оновлено в таблиці: " + done + " з " + all.length + (notSent ? " · не передано: " + notSent + " — список під кнопками" : ""));
-      pushLog("надіслав теги в Google Таблицю", finLabel(finMonth) + " · " + done + " з " + all.length +
+      pushLog("надіслав теги в Google Таблицю", zpLabel + " · " + done + " з " + all.length +
         (missing.length ? " · не передано: " + missing.map((m) => m.name).join(", ") : ""));
     } catch (e) {
       setToast("Не вийшло надіслати: " + e.message);
     } finally { setZpBusy(false); }
   }
-  const zpMissIds = new Set((zpReport && zpReport.month === finLabel(finMonth) ? zpReport.missing : []).map((m) => m.id));
+  const zpMissIds = new Set((zpReport && zpReport.fk === finKey ? zpReport.missing : []).map((m) => m.id));
 
   function exportFin() {
     const rows = finRows;
@@ -2723,10 +2818,44 @@ export default function TransferDesk() {
                   Звіт в Excel
                 </button>
               </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 12 }}>
+                <span style={{ color: C.ink2, fontSize: 13, fontWeight: 600 }}>Теги для ЗП за:</span>
+                <select value={tagRange.mode} aria-label="Проміжок для тегів" style={{ width: "auto" }}
+                  onChange={(ev) => {
+                    const mode = ev.target.value;
+                    setTagRange((t) => ({ mode,
+                      from: t.from || finKey + "-01", to: t.to || lastDayISO(finMonth.y, finMonth.m) }));
+                  }}>
+                  <option value="month">{finLabel(finMonth)} — зведено за місяць</option>
+                  <option value="h1">01–15</option>
+                  <option value="h2">16–{finDays}</option>
+                  <option value="custom">свої дати…</option>
+                </select>
+                {tagRange.mode === "custom" && (
+                  <>
+                    <input type="date" value={tagRange.from} aria-label="Початок проміжку" style={{ width: "auto" }}
+                      onChange={(ev) => setTagRange((t) => ({ ...t, from: ev.target.value }))} />
+                    <span style={{ color: C.muted }}>—</span>
+                    <input type="date" value={tagRange.to} aria-label="Кінець проміжку" style={{ width: "auto" }}
+                      onChange={(ev) => setTagRange((t) => ({ ...t, to: ev.target.value }))} />
+                    <button className="link" onClick={() => setTagRange((t) => ({ ...t, from: finKey + "-01", to: lastDayISO(finMonth.y, finMonth.m) }))}>
+                      увесь {finLabel(finMonth).toLowerCase()}
+                    </button>
+                  </>
+                )}
+                {tagOn && (
+                  <span style={{ fontSize: 12.5, color: tagSpanBad ? C.stop : C.plan }}>
+                    {tagSpanBad ? "початок має бути не пізніше кінця, проміжок — не довше року"
+                      : "«Теги для ЗП» і «У Google Таблицю» передадуть теги за " + tagSpanLabel + " (" + (daysBetween(tagSpan.from, tagSpan.to) + 1) + " дн.) — див. стовпчик «Тег за період»"}
+                  </span>
+                )}
+              </div>
               <p style={{ margin: "10px 0 0", color: C.muted, fontSize: 12.5 }}>
                 Дві половини зводяться пропорційно дням: 01–15 × 15/{finDays} + 16–{finDays} × {finDays - 15}/{finDays}, округлено до цілих.
                 Якщо одну половину не заповнено, береться інша. Клітинку можна змінити вручну — вона підсвітиться, розрахунок видно в підказці. Галочками можна позначити людей і вивантажити їхні теги для таблиці зарплат.
                 Показано всіх, хто є в табелі, і людей зі змінами за переведеннями в цьому місяці. Хто не в табелі — рахується за переведеннями: переведення з середини місяця дає частку пропорційно дням.
+                Теги для ЗП можна взяти не за місяць, а за проміжок: кожен день важить однаково, дні беруться з тієї половини табеля, куди потрапляють;
+                повний місяць усередині проміжку — таким, як його показує фін. облік (з коригуваннями).
               </p>
               {repCount > 0 && (
                 <p style={{ margin: "12px 0 0", background: C.signalSoft, border: "1px solid #B9DCE0", borderRadius: 3, padding: "10px 12px", color: C.signal }}>
@@ -2746,7 +2875,7 @@ export default function TransferDesk() {
                   щоб перерахувати, відкрийте місяць знову.
                 </p>
               )}
-              {zpReport && zpReport.month === finLabel(finMonth) && (() => {
+              {zpReport && zpReport.fk === finKey && (() => {
                 const n = zpReport.missing.length + zpReport.other.length + zpReport.unknown;
                 const ok = n === 0;
                 return (
@@ -2882,6 +3011,7 @@ export default function TransferDesk() {
                         ))}
                         <th style={{ minWidth: 70, textAlign: "center" }}>Разом</th>
                         <th style={{ minWidth: 190 }}>Тег за місяць</th>
+                        {tagOn && <th style={{ minWidth: 190, color: C.plan }}>Тег за період<div className="num" style={{ fontWeight: 400, fontSize: 11.5 }}>{tagSpanLabel}</div></th>}
                         <th style={{ minWidth: 180 }}>Примітка</th>
                       </tr>
                     </thead>
@@ -2929,6 +3059,15 @@ export default function TransferDesk() {
                                 </div>
                               )}
                             </td>
+                            {tagOn && (() => {
+                              const x = tagByRange.get(r.id);
+                              return (
+                                <td className="num" style={{ fontWeight: 600, color: x && x.tag ? C.plan : C.muted, wordBreak: "break-all", fontSize: 12.5, background: "#F5F7FD" }}>
+                                  {tagSpanBad ? "—" : (x && x.tag) || "—"}
+                                  {!tagSpanBad && x && x.note && <div style={{ fontWeight: 400, fontSize: 11.5, color: C.muted, wordBreak: "normal" }}>{x.note}</div>}
+                                </td>
+                              );
+                            })()}
                             <td style={{ padding: 4 }}>
                               <input type="text" value={r.note} disabled={finClosed} placeholder={r.manual ? "чому змінено" : ""}
                                 onChange={(ev) => setFinRecord(r.id, { note: ev.target.value })} aria-label={"Примітка, " + r.name} />
@@ -2945,7 +3084,7 @@ export default function TransferDesk() {
                             {num2(finShown.reduce((s, r) => s + (Number((r.alloc.find((x) => x.project === c) || {}).percent) || 0) / 100, 0)) || "—"}
                           </td>
                         ))}
-                        <td colSpan={3} style={{ background: "#F4F7FC" }} />
+                        <td colSpan={tagOn ? 4 : 3} style={{ background: "#F4F7FC" }} />
                       </tr>
                     </tbody>
                   </table>
