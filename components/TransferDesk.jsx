@@ -3300,7 +3300,7 @@ export default function TransferDesk() {
                       <div style={{ flex: "1 1 320px" }}>
                         <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 19, fontWeight: 600 }}>PeopleForce</h2>
                         <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>
-                          Щоранку підтягує нових людей, звільнення, посади й відділи. Розподіл по проєктах, команди й переведення не змінюються.
+                          Щоночі (близько 03:00 за Києвом) лише читає PeopleForce: додає нових людей і оновлює статус «працює / звільнений». Ім'я, посаду, команди, розподіл і переведення наявних людей не змінює.
                           Звільнені зникають зі списків, але їхня історія лишається.
                         </p>
                       </div>
@@ -3456,9 +3456,7 @@ export default function TransferDesk() {
                               <tr key={e.id}>
                                 <td className="num" style={{ color: C.muted }}>{i + 1}</td>
                                 <td style={e.leftOn && e.leftOn < today ? { opacity: 0.6 } : undefined}>
-                                  {e.pfId
-                                    ? <div style={{ fontWeight: 600 }} title="Ім'я береться з PeopleForce">{e.name}</div>
-                                    : <TextCell value={e.name} aria="Ім'я співробітника" onCommit={(v) => renameEmployee(e.id, v)} />}
+                                  <TextCell value={e.name} aria="Ім'я співробітника" onCommit={(v) => renameEmployee(e.id, v)} />
                                   <div style={{ color: C.muted, fontSize: 11.5, marginTop: 2 }}>
                                     {[e.extId && "ід " + e.extId, e.pfId && "PeopleForce"].filter(Boolean).join(" · ")}
                                   </div>
@@ -3467,10 +3465,8 @@ export default function TransferDesk() {
                                   )}
                                 </td>
                                 <td>
-                                  {e.pfId
-                                    ? <div title="Посада береться з PeopleForce">{e.position || "—"}</div>
-                                    : <TextCell value={e.position || ""} placeholder="—" aria="Посада"
-                                        onCommit={(v) => setEmployees((p) => p.map((x) => x.id === e.id ? { ...x, position: v, updatedAt: nowISO() } : x))} />}
+                                  <TextCell value={e.position || ""} placeholder="—" aria="Посада"
+                                    onCommit={(v) => setEmployees((p) => p.map((x) => x.id === e.id ? { ...x, position: v, updatedAt: nowISO() } : x))} />
                                   {(e.department || e.division) && <div style={{ color: C.muted, fontSize: 11.5, marginTop: 2 }}>{[e.division, e.department].filter(Boolean).join(" / ")}</div>}
                                 </td>
                                 <td>{allocText(allocAt(e, transfers, today))}</td>
