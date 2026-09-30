@@ -59,7 +59,8 @@ function fillTpl(tpl, v) {
 }
 
 export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings, setSettings, codes, codeList, spanCalculator, toParts,
-  token, setToast, pushLog, stamp, today, openCard, canEdit = true }) {
+  token, setToast, pushLog, stamp, today, openCard, canEdit = true, mode = "pay", onOpenBook }) {
+  // mode: "pay" — відомості; "legal" — довідник юросіб; "fpv" — довідник FPV (обидва живуть у розділі «Довідник»).
   // canEdit=false — лише перегляд (зараз і адміністратор, і бухгалтер мають повні права у відомостях).
   const pay = settings.pay || {};
   const tpl = { ...DEFAULT_TPL, ...(pay.tpl || {}) };
@@ -330,6 +331,7 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
     <div style={{ display: "grid", gap: 20 }}>
       <datalist id="pay-people">{rows.map((r) => <option key={r.id} value={r.name} />)}</datalist>
 
+      {mode === "pay" && (<>
       <section style={{ ...card, padding: "16px 20px" }}>
         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ fontWeight: 600, color: C.ink2 }}>Період</span>
@@ -352,6 +354,7 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
         <p style={{ margin: "10px 0 0", color: C.muted, fontSize: 12.5 }}>
           Теги Штату — за {spanText(staffSpan)}, Гігу — за {spanText(gigSpan)}. Розподіл: «тег як у …» → табель / звіт годин / коригування → фіксований → довідник.
           Юрособа, Штат/Гіг і ІПН задаються тут (або імпортом з таблиці «Теги ЗП»); ПІБ повністю приходить із PeopleForce.
+          {onOpenBook && <> Довідники: <button className="link" onClick={() => onOpenBook("legal")}>юрособи</button>, <button className="link" onClick={() => onOpenBook("fpv")}>FPV та імпорт</button>.</>}
         </p>
         {!sheetReady && (
           <p style={{ margin: "10px 0 0", background: C.warnSoft, borderRadius: 8, padding: "10px 14px", color: C.ink2, fontSize: 12.5 }}>
@@ -498,6 +501,8 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
         </div>
       </section>
 
+      </>)}
+      {mode === "legal" && (
       <section style={{ ...card, padding: "16px 20px" }}>
         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           <h3 style={{ margin: 0, fontFamily: SERIF, fontSize: 16, fontWeight: 600 }}>Довідник юросіб</h3>
@@ -561,6 +566,8 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
         )}
       </section>
 
+      )}
+      {mode === "fpv" && (
       <section style={{ ...card, padding: "16px 20px" }}>
         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           <h3 style={{ margin: 0, fontFamily: SERIF, fontSize: 16, fontWeight: 600 }}>Довідник FPV</h3>
@@ -598,6 +605,59 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
             onKeyDown={(e) => { if (e.key === "Enter") addFpv(); }} style={{ width: 320 }} />
           <button onClick={addFpv} style={btn(true)}>Додати</button>
         </div>}
+        {(() => {
+          const list = rows.filter((r) => r.kind === "fpv");
+          if (!list.length) return <p style={{ margin: "14px 0 0", color: C.muted, fontSize: 12.5 }}>Активних FPV немає. Додайте людей вище або імпортуйте з таблиці «Теги ЗП».</p>;
+          return (
+            <div style={{ overflowX: "auto", marginTop: 14 }}>
+              <table>
+                <thead><tr>
+                  <th style={{ minWidth: 260 }}>ПІБ</th><th style={{ minWidth: 110 }}>Тип</th><th style={{ minWidth: 200 }}>Юрособа</th>
+                  <th style={{ minWidth: 90 }}>ІПН</th><th style={{ minWidth: 180 }}>Розподіл</th><th style={{ width: 90, textAlign: "center" }}>Активний</th>
+                </tr></thead>
+                <tbody>
+                  {list.map((r) => (
+                    <tr key={r.id}>
+                      <td>
+                        <span style={{ fontWeight: 600 }}>{r.name}</span>
+                        {canEdit && <> · <button className="link" style={{ fontSize: 12 }} onClick={() => askFio(r)}>змінити</button></>}
+                        {r.problems.length > 0 && <div style={{ fontSize: 11.5, color: C.warn }}>{r.problems.join(" · ")}</div>}
+                      </td>
+                      <td style={{ padding: 4 }}>
+                        <select value={r.type} disabled={!canEdit} aria-label={"Тип, " + r.name} onChange={(e) => setF(r.id, { type: e.target.value })} style={{ padding: "6px 8px" }}>
+                          <option value="Штат">Штат</option><option value="Гіг">Гіг</option>
+                        </select>
+                      </td>
+                      <td style={{ padding: 4 }}>
+                        <select value={r.legal} disabled={!canEdit} aria-label={"Юрособа, " + r.name} onChange={(e) => setF(r.id, { legal: e.target.value })} style={{ padding: "6px 8px" }}>
+                          <option value="">—</option>
+                          {legalNames.map((n) => <option key={n} value={n}>{n}</option>)}
+                          {r.legal && !legalNames.includes(r.legal) && <option value={r.legal}>{r.legal} (немає в довіднику)</option>}
+                        </select>
+                      </td>
+                      <td>
+                        <button className="link num" style={{ fontSize: 12, color: inn[r.id] ? C.ink2 : C.stop }} onClick={() => askInn(r)}>{inn[r.id] ? (shownInn[r.id] || inn[r.id].m) : "ввести"}</button>
+                        {inn[r.id] && <div><button className="link" style={{ fontSize: 11 }} onClick={() => revealInn(r)}>{shownInn[r.id] ? "сховати" : "показати"}</button></div>}
+                      </td>
+                      <td style={{ padding: 4 }}>
+                        <input type="text" className="num" defaultValue={r.fixed} key={r.id + "|" + r.fixed} disabled={!canEdit} aria-label={"Розподіл, " + r.name} style={{ fontSize: 12 }}
+                          onBlur={(e) => {
+                            const v = e.target.value.trim();
+                            if (v && parseFixed(v).bad.length) return setToast("Не розібрав: " + parseFixed(v).bad.join(", ") + ". Формат: fpv-100");
+                            setF(r.id, { fixed: v || "fpv-100" });
+                          }} />
+                      </td>
+                      <td style={{ textAlign: "center" }}>
+                        <input type="checkbox" checked disabled={!canEdit} style={{ width: "auto" }} aria-label={"Активний, " + r.name}
+                          onChange={() => setF(r.id, { active: false })} title="Зняти — прибрати з активних (у відомості не потраплятиме)" />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
+        })()}
         {(fpv || []).filter((f) => f.active === false).length > 0 && (
           <details style={{ marginTop: 10, fontSize: 12.5 }}>
             <summary style={{ cursor: "pointer", color: C.muted }}>Неактивні FPV: {(fpv || []).filter((f) => f.active === false).length}</summary>
@@ -609,6 +669,7 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
           </details>
         )}
       </section>
+      )}
     </div>
   );
 }

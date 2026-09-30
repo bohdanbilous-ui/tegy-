@@ -718,7 +718,8 @@ export default function TransferDesk() {
   const isHrd = role === "hrd";
   const isAcc = role === "accountant";
   // Бухгалтер працює лише у відомостях ЗП.
-  useEffect(() => { if (isAcc && tab !== "pay") setTab("pay"); }, [isAcc, tab]);
+  useEffect(() => { if (isAcc && tab !== "pay" && tab !== "lists") setTab("pay"); }, [isAcc, tab]);
+  useEffect(() => { if (isAcc && !["legal", "fpv"].includes(book)) setBook("legal"); }, [isAcc, book]);
   const allPMs = useMemo(() => uniq(Object.values(pms)), [pms]);
   const isPMof = (project) => !!user && (pms[project] || "").toLowerCase() === user.name.toLowerCase();
   const canDecide = (a) => isAdmin || isPMof(a.project);
@@ -2127,7 +2128,7 @@ export default function TransferDesk() {
       <style>{css}</style>
       {(() => {
         /* Навігація: розділи — у бічному меню, вкладки розділу — над сторінкою. */
-        const allowed = (k) => isAcc ? k === "pay" : isAdmin || !["approve", "lists", "fin", "req", "remind", "pay"].includes(k);
+        const allowed = (k) => isAcc ? k === "pay" || k === "lists" : isAdmin || !["approve", "lists", "fin", "req", "remind", "pay"].includes(k);
         const TABS = {
           form: "Нове переведення", journal: "Журнал",
           approve: "Погодження" + (myPending.length ? " · " + myPending.length : ""),
@@ -2911,7 +2912,8 @@ export default function TransferDesk() {
           <PayDesk employees={employees} setEmployees={setEmployees} fpv={fpv} setFpv={setFpv}
             settings={settings} setSettings={setSettings} codes={codes} codeList={CODES}
             spanCalculator={paySpanCalc} toParts={payParts} token={tokenRef.current}
-            setToast={setToast} pushLog={pushLog} stamp={nowISO} today={today} openCard={isAdmin ? setCardId : null} />
+            setToast={setToast} pushLog={pushLog} stamp={nowISO} today={today} openCard={isAdmin ? setCardId : null}
+            onOpenBook={(b) => { setTab("lists"); setBook(b); }} />
         )}
 
         {tab === "fin" && isAdmin && (
@@ -3419,15 +3421,16 @@ export default function TransferDesk() {
         )}
 
         {/* ── ДОВІДНИК ── */}
-        {tab === "lists" && isAdmin && (
+        {tab === "lists" && (isAdmin || isAcc) && (
           <div style={{ display: "grid", gap: 18 }}>
             {listNote && <p role="status" style={{ margin: 0, background: C.signalSoft, border: "1px solid #BFDBFE", borderRadius: 8, padding: "10px 14px", color: C.ink2 }}>{listNote}</p>}
 
             <section style={{ ...card, padding: "6px 6px 0" }}>
               <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
                 {[["emp", "Співробітники", employees.length], ["proj", "Проєкти", allProjects.length],
+                  ["legal", "Юрособи", ((settings.pay || {}).legals || []).length], ["fpv", "FPV", (fpv || []).filter((f) => f.active !== false).length],
                   ["pp", "People Partners", partners.length], ["reason", "Підстави", allReasons.length],
-                  ["users", "Користувачі", ""], ["cfg", "Налаштування", ""]].map(([k, l, n]) => (
+                  ["users", "Користувачі", ""], ["cfg", "Налаштування", ""]].filter(([k]) => !isAcc || k === "legal" || k === "fpv").map(([k, l, n]) => (
                   <button key={k} onClick={() => setBook(k)} aria-current={book === k}
                     style={{ cursor: "pointer", border: "none", background: book === k ? C.ink : "transparent",
                       color: book === k ? "#fff" : C.ink2, padding: "10px 16px", borderRadius: 8, marginBottom: 6,
@@ -3438,9 +3441,16 @@ export default function TransferDesk() {
               </div>
             </section>
 
-            {book === "users" && <UsersBook token={tokenRef.current} me={user} />}
+            {book === "users" && isAdmin && <UsersBook token={tokenRef.current} me={user} />}
 
-            {book === "emp" && (
+            {(book === "legal" || book === "fpv") && (
+              <PayDesk mode={book} employees={employees} setEmployees={setEmployees} fpv={fpv} setFpv={setFpv}
+                settings={settings} setSettings={setSettings} codes={codes} codeList={CODES}
+                spanCalculator={paySpanCalc} toParts={payParts} token={tokenRef.current}
+                setToast={setToast} pushLog={pushLog} stamp={nowISO} today={today} openCard={isAdmin ? setCardId : null} />
+            )}
+
+            {isAdmin && book === "emp" && (
               <>
                 {isAdmin && (
                   <section style={{ ...card, padding: 20 }}>
@@ -3662,7 +3672,7 @@ export default function TransferDesk() {
               </>
             )}
 
-            {book === "proj" && (
+            {isAdmin && book === "proj" && (
               <section style={{ ...card, overflow: "hidden" }}>
                 <div style={{ padding: "16px 18px", borderBottom: "1px solid " + C.lineSoft }}>
                   <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>Проєкти</h2>
@@ -3724,7 +3734,7 @@ export default function TransferDesk() {
               </section>
             )}
 
-            {book === "cfg" && (
+            {isAdmin && book === "cfg" && (
               <section style={{ ...card, padding: 22, maxWidth: 720 }}>
                 <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>Погодження</h2>
                 <p style={{ margin: "6px 0 0", color: C.ink2 }}>
@@ -3786,7 +3796,7 @@ export default function TransferDesk() {
               </section>
             )}
 
-            {book === "pp" && (
+            {isAdmin && book === "pp" && (
               <section style={{ ...card, overflow: "hidden" }}>
                 <div style={{ padding: "16px 18px", borderBottom: "1px solid " + C.lineSoft }}>
                   <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>People Partners</h2>
@@ -3820,7 +3830,7 @@ export default function TransferDesk() {
               </section>
             )}
 
-            {book === "reason" && (
+            {isAdmin && book === "reason" && (
               <section style={{ ...card, overflow: "hidden" }}>
                 <div style={{ padding: "16px 18px", borderBottom: "1px solid " + C.lineSoft }}>
                   <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>Підстави переведення</h2>
