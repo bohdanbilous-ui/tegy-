@@ -81,7 +81,7 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
   const incomingPending = data ? (data.incoming || []).filter((r) => r.status === "new" && (r.approvals || []).some((a) => a.role === "give" && mine.has(a.project) && a.status === "pending")) : [];
   const meName = data ? String(data.me.name || "").trim().toLowerCase() : "";
   // Те, що я можу підтвердити: PM проєкту, звідки людина; власні записи — ні (їх підтверджує колега або адміністратор).
-  const toConfirm = data ? data.loans.filter((l) => l.status === "pending"
+  const toConfirm = data ? data.loans.filter((l) => l.status === "pending" && !l.stale
     && (isAdmin || (lendersOf(l).some((p) => mine.has(p)) && String(l.createdBy || "").trim().toLowerCase() !== meName))) : [];
 
   const card = { background: C.surface, border: "1px solid " + C.line, borderRadius: 10, boxShadow: "0 1px 2px rgba(15,23,42,.04)" };
@@ -392,7 +392,7 @@ function Facts({ data, mine, isAdmin, busy, act, card }) {
                     <td>{l.employeeName}{l.comment && <div style={{ fontSize: 12, color: C.muted }}>{l.comment}</div>}</td>
                     <td style={{ fontSize: 12.5 }}>{transferLine(l.transfer)}<div style={{ color: C.muted }}>підтверджує {whoConfirms(data, l.lenderProjects)}</div></td>
                     <td className="num"><b>{l.project}</b>: {factText(l)}{l.hours > 0 && <div style={{ fontSize: 12, color: C.muted }}>≈ {Math.round((l.hours * 1000) / normHours(l.periodKey)) / 10}% норми{l.planHours ? ", план ≈ " + l.planHours + " год" : ""}</div>}</td>
-                    <td><Pill v={LOAN[l.status]} />{l.decidedBy && <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{l.decidedBy}, {fmtDT(l.decidedAt)}{l.decisionComment ? " · «" + l.decisionComment + "»" : ""}</div>}</td>
+                    <td><Pill v={LOAN[l.status]} />{l.stale && <div style={{ fontSize: 12, color: C.warn, marginTop: 4 }}>переведення змінили — запис не впливає на теги</div>}{l.decidedBy && <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{l.decidedBy}, {fmtDT(l.decidedAt)}{l.decisionComment ? " · «" + l.decisionComment + "»" : ""}</div>}</td>
                     <td style={{ whiteSpace: "nowrap" }}>
                       {l.status !== "confirmed" && <button className="link" onClick={() => setEditId(editId === l.id ? "" : l.id)}>змінити</button>}
                       {l.status !== "confirmed" && <> · <button className="link" style={{ color: C.stop }} disabled={busy} onClick={() => window.confirm("Прибрати запис?") && act({ action: "loan-delete", id: l.id }, "Запис прибрано")}>прибрати</button></>}
@@ -464,7 +464,7 @@ function Confirm({ data, mine, isAdmin, list, notes, setNotes, busy, act, card }
                     <td>{l.employeeName}</td>
                     <td>{l.project}</td>
                     <td className="num">{factText(l)}</td>
-                    <td><Pill v={LOAN[l.status]} /> <span style={{ fontSize: 12, color: C.muted }}>{l.decidedBy}</span></td>
+                    <td><Pill v={LOAN[l.status]} /> <span style={{ fontSize: 12, color: C.muted }}>{l.decidedBy}</span>{l.stale && <div style={{ fontSize: 12, color: C.warn, marginTop: 4 }}>переведення змінили — запис не впливає на теги</div>}</td>
                     <td>{(isAdmin || !own(l)) && <button className="link" disabled={busy} onClick={() => window.confirm("Зняти рішення? Запис знову чекатиме на підтвердження, а підтверджені години перестануть впливати на тег.") && act({ action: "loan-reopen", id: l.id }, "Рішення знято")}>зняти рішення</button>}</td>
                   </tr>
                 ))}
@@ -652,7 +652,7 @@ export function LoansAdmin({ token, onChanged, setToast }) {
                   <td style={{ fontSize: 12.5 }}>{transferLine(l.transfer)}<div style={{ color: C.muted }}>підтверджує {whoConfirms(data, l.lenderProjects)}</div></td>
                   <td className="num"><b>{l.project}</b>: {factText(l)}<div style={{ fontSize: 12, color: C.muted }}>норма {normHours(l.periodKey)}{l.planHours ? ", план ≈ " + l.planHours : ""}</div></td>
                   <td style={{ fontSize: 12.5 }}>{l.createdBy}<div style={{ color: C.muted }}>{fmtDT(l.updatedAt)}</div></td>
-                  <td><Pill v={LOAN[l.status]} />{l.decidedBy && <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{l.decidedBy}{l.decisionComment ? " · «" + l.decisionComment + "»" : ""}</div>}</td>
+                  <td><Pill v={LOAN[l.status]} />{l.stale && <div style={{ fontSize: 12, color: C.warn, marginTop: 4 }}>переведення змінили — запис не впливає на теги</div>}{l.decidedBy && <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{l.decidedBy}{l.decisionComment ? " · «" + l.decisionComment + "»" : ""}</div>}</td>
                   <td style={{ minWidth: 230 }}>
                     {l.status === "pending" ? (
                       <div style={{ display: "grid", gap: 6 }}>

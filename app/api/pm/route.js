@@ -7,7 +7,7 @@ import { workingOn } from "../../../lib/people";
 import { orderProjects, isInactive } from "../../../lib/projects";
 import { allocAt, asAlloc, approvalState, approvalsFor } from "../../../lib/alloc";
 import { isPm, pmList } from "../../../lib/pms";
-import { LOANS_KEY, PERIOD_RE, DATE_RE, MAX_LOAN_HOURS, periodRange, normHours, factNeeded, factSlots, lendersOf } from "../../../lib/loans";
+import { LOANS_KEY, PERIOD_RE, DATE_RE, MAX_LOAN_HOURS, periodRange, normHours, factNeeded, factSlots, lendersOf, loanFits } from "../../../lib/loans";
 
 export const dynamic = "force-dynamic";
 
@@ -119,7 +119,7 @@ function view(state, me, loans, requests) {
     }));
   const byId = new Map(c.transfers.map((t) => [t.id, t]));
   const myLoans = (c.isAdmin ? loans : loans.filter((l) => c.mine.has(l.project) || lendersOf(l).some((p) => c.mine.has(p)) || sameName(l.createdBy, me.name)))
-    .map((l) => ({ ...l, lenderProjects: lendersOf(l), transfer: transferInfo(byId.get(l.transferId)) }));
+    .map((l) => ({ ...l, lenderProjects: lendersOf(l), transfer: transferInfo(byId.get(l.transferId)), stale: !loanFits(l, byId.get(l.transferId)) }));
   return {
     me: { name: me.name, role: me.role },
     myProjects: [...c.mine],
@@ -258,6 +258,8 @@ export async function POST(request) {
       list[i] = { ...l, status: "pending", decidedBy: "", decidedAt: "", decisionComment: "", updatedAt: stamp, updatedBy: me.name };
     } else {
       if (l.status !== "pending") return bad("Рішення вже ухвалив(ла) " + (l.decidedBy || "інший PM") + ".", 409);
+      if (c.closed.has(l.periodKey.slice(0, 7)) && !c.isAdmin) return bad("Місяць закрито у фін. обліку — рішення вже не вплине на теги.", 409);
+      if (!loanFits(l, c.transfers.find((t) => t.id === l.transferId))) return bad("Переведення змінили або скасували — цей запис більше не відповідає йому. Внесіть факт заново.", 409);
       const ok = !!body.ok, comment = str(body.comment, 500);
       if (!ok && !comment) return bad("Напишіть, чому відхиляєте.");
       list[i] = { ...l, status: ok ? "confirmed" : "rejected", decidedBy: me.name, decidedAt: stamp, decisionComment: comment, updatedAt: stamp, updatedBy: me.name };

@@ -6,7 +6,7 @@ import { hoursToAlloc, hoursTotal, hoursText, hasHours, MAX_HOURS } from "../lib
 import { api } from "../lib/api";
 import { workingOn } from "../lib/people";
 import { orderProjects, isInactive } from "../lib/projects";
-import { applyLoans, confirmedIndex, normHours, loanText } from "../lib/loans";
+import { applyLoans, confirmedIndex, normHours, loanText, loanFits } from "../lib/loans";
 import { pmList, isPm, pmNormalize, pmText } from "../lib/pms";
 import { donorState, carryApprovals } from "../lib/alloc";
 import TeamDesk from "./TeamDesk";
@@ -915,7 +915,7 @@ export default function TransferDesk() {
     setTab("form");
   }
   function rejectRequest(r) {
-    const why = window.prompt("Чому відхиляєте заявку щодо «" + r.employee + "»? (побачите лише ви)", "");
+    const why = window.prompt("Чому відхиляєте заявку щодо «" + r.employee + "»? (побачить і заявник)", "");
     if (why === null) return;
     decideRequest(r, "rejected", "", why);
   }
@@ -1007,8 +1007,9 @@ export default function TransferDesk() {
      години ÷ усі години людини за період (з табеля в годинах, інакше норма), решта — пропорційно. */
   // Факт скасованого переведення тег не змінює.
   const loanIdx = useMemo(() => {
-    const live = new Set(transfers.filter((t) => !t.cancelled).map((t) => t.id));
-    return confirmedIndex(loans.filter((l) => !l.transferId || live.has(l.transferId)));
+    // Факт враховуємо, лише поки він відповідає переведенню (не скасоване й не змінене так, що запис «осиротів»).
+    const byT = new Map(transfers.map((t) => [t.id, t]));
+    return confirmedIndex(loans.filter((l) => !l.transferId || loanFits(l, byT.get(l.transferId))));
   }, [loans, transfers]);
   const loanAdj = (empId, key, alloc) => {
     const list = loanIdx.get(empId + "|" + key);
