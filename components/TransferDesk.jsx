@@ -8,6 +8,7 @@ import { workingOn } from "../lib/people";
 import { orderProjects, isInactive } from "../lib/projects";
 import { applyLoans, confirmedIndex, normHours, loanText } from "../lib/loans";
 import { pmList, isPm, pmNormalize, pmText } from "../lib/pms";
+import { donorState, carryApprovals } from "../lib/alloc";
 import TeamDesk from "./TeamDesk";
 import Reminders from "./Reminders";
 import PayDesk from "./PayDesk";
@@ -814,7 +815,7 @@ export default function TransferDesk() {
       from: currentAlloc, to: rows, effectiveDate,
       temporary, returnDate: temporary ? returnDate : "",
       reason: reason.trim(), note: note.trim(),
-      approvals: approvalsFor(currentAlloc, rows, pms),
+      approvals: fromRequest && fromRequest.approvals ? carryApprovals(approvalsFor(currentAlloc, rows, pms), fromRequest.approvals) : approvalsFor(currentAlloc, rows, pms),
       partner: user.name, partnerEmail: user.email || "",
       createdAt: nowISO(), updatedAt: nowISO(), cancelled: false,
     }, ...p]);
@@ -897,6 +898,10 @@ export default function TransferDesk() {
     catch (e) { setToast("Не вдалося оновити заявку: " + e.message); }
   }
   function takeRequest(r) {
+    if (donorState(r.approvals) === "rejected") {
+      const no = (r.approvals || []).filter((a) => a.status === "rejected").map((a) => a.project + (a.comment ? " — «" + a.comment + "»" : "")).join("; ");
+      if (!window.confirm("PM проєкту-донора заперечує: " + no + ".\nВсе одно створити переведення?")) return;
+    }
     const emp = employees.find((e) => e.id === r.employeeId) || employees.find((e) => e.name.trim().toLowerCase() === r.employee.trim().toLowerCase());
     if (emp) setSelectedId(emp.id);
     setDist(r.alloc.map((x) => ({ project: x.project, percent: x.percent })));
@@ -2476,6 +2481,19 @@ export default function TransferDesk() {
                 <div style={{ marginTop: 6, fontSize: 13, color: r.agreedWith ? C.ink2 : C.warn }}>
                   Погоджено з: {r.agreedWith ? <b>{r.agreedWith}</b> : "не вказано"}
                 </div>
+                {(r.approvals || []).some((a) => a.role === "give") && (
+                  <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap", fontSize: 12.5 }}>
+                    {(r.approvals || []).filter((a) => a.role === "give").map((a) => {
+                      const col = a.status === "approved" ? C.signal : a.status === "rejected" ? C.stop : C.warn;
+                      const bg = a.status === "approved" ? C.signalSoft : a.status === "rejected" ? C.stopSoft : C.warnSoft;
+                      return (
+                        <span key={a.project} style={{ background: bg, color: col, borderRadius: 999, padding: "2px 9px", fontWeight: 600 }}>
+                          {a.project} віддає: {a.status === "approved" ? "погоджено" : a.status === "rejected" ? "заперечення" : "чекає на " + (pmText(a.pm) || "PM")}{a.by ? " · " + a.by : ""}{a.comment && a.status === "rejected" ? " · «" + a.comment + "»" : ""}
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
                 {r.note && <p style={{ margin: "8px 0 0", color: C.ink2, whiteSpace: "pre-wrap" }}>{r.note}</p>}
                 {r.status === "new" ? (
                   <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
@@ -2499,7 +2517,7 @@ export default function TransferDesk() {
               <section style={{ ...card, padding: "16px 18px" }}>
                 <p style={{ margin: 0, color: C.ink2 }}>
                   Сюди потрапляють заявки з Google Форми. «Створити переведення» підставляє дані у форму нового переведення —
-                  ви перевіряєте й зберігаєте, заявка позначається як оброблена. Автор заявки бачить лише саму форму.
+                  ви перевіряєте й зберігаєте, заявка позначається як оброблена. Заявки від PM спершу погоджує PM проєкту, з якого просять людину; його рішення переноситься в переведення. Заявки з Google Форми цього кроку не мають.
                 </p>
                 {!formReady && (
                   <p style={{ margin: "10px 0 0", background: C.warnSoft, border: "1px solid #FED7AA", borderRadius: 8, padding: "10px 12px", color: C.warn }}>

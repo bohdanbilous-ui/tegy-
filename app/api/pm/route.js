@@ -5,7 +5,7 @@ import { whoIs } from "../../../lib/auth";
 import { sameName } from "../../../lib/users";
 import { workingOn } from "../../../lib/people";
 import { orderProjects, isInactive } from "../../../lib/projects";
-import { allocAt, asAlloc, approvalState } from "../../../lib/alloc";
+import { allocAt, asAlloc, approvalState, approvalsFor } from "../../../lib/alloc";
 import { isPm, pmList } from "../../../lib/pms";
 import { LOANS_KEY, PERIOD_RE, DATE_RE, MAX_LOAN_HOURS, periodRange, normHours, factNeeded, factSlots, lendersOf } from "../../../lib/loans";
 
@@ -26,7 +26,10 @@ export const dynamic = "force-dynamic";
         (PM проєкту, звідки людина, або адміністратор). На теги впливають лише підтверджені години.
    POST { action: "loan-reopen", id }                                — зняти рішення (той самий PM або адміністратор).
    POST { action: "request", employeeId, alloc, effectiveDate, temporary, returnDate, reason, note }
-        — заявка на переведення; потрапляє адміністратору у «Заявки». */
+        — заявка на переведення; потрапляє адміністратору у «Заявки». Проєкти, з яких людину забирають
+          (донори), мають її погодити: запит одразу з'являється в їхніх PM. Там, де PM — сам заявник, погоджується автоматично.
+   POST { action: "req-decide", requestId, project, ok, comment }    — PM проєкту-донора погоджує / заперечує заявку
+        (достатньо будь-кого з PM проєкту; адміністратор може створити переведення й попри заперечення). */
 
 const REQUESTS_KEY = "transfers:requests:v1";
 const str = (v, n) => String(v == null ? "" : v).trim().slice(0, n);
@@ -102,6 +105,18 @@ function view(state, me, loans, requests) {
       effectiveDate: t.effectiveDate, temporary: !!t.temporary, returnDate: t.returnDate || "", reason: t.reason || "", note: t.note || "",
       partner: t.partner || "", approvals: t.approvals || [], state: approvalState(t, (state.settings || {}).approvalMode),
     }));
+  // Запити на людей з моїх проєктів: заявки PM, де мій проєкт — донор (мають погодити я або колега-PM).
+  const cutoffISO = new Date(Date.now() - 120 * 86400000).toISOString();
+  const needsMe = (r) => (r.approvals || []).some((a) => a.role === "give" && c.mine.has(a.project) && a.status === "pending");
+  const incoming = requests.filter((r) => Array.isArray(r.approvals) && r.approvals.some((a) => a.role === "give" && c.mine.has(a.project)))
+    .filter((r) => r.status === "new" || String(r.createdAt || "") >= cutoffISO)
+    .sort((a, b) => Number(needsMe(b)) - Number(needsMe(a)) || String(b.createdAt).localeCompare(String(a.createdAt)))
+    .slice(0, 100)
+    .map((r) => ({
+      id: r.id, status: r.status, requester: r.requester || "", employee: r.employee, employeeId: r.employeeId || "",
+      from: r.from || [], alloc: r.alloc || [], effectiveDate: r.effectiveDate, temporary: !!r.temporary, returnDate: r.returnDate || "",
+      reason: r.reason || "", note: r.note || "", approvals: r.approvals || [], createdAt: r.createdAt || "", comment: r.comment || "",
+    }));
   const byId = new Map(c.transfers.map((t) => [t.id, t]));
   const myLoans = (c.isAdmin ? loans : loans.filter((l) => c.mine.has(l.project) || lendersOf(l).some((p) => c.mine.has(p)) || sameName(l.createdBy, me.name)))
     .map((l) => ({ ...l, lenderProjects: lendersOf(l), transfer: transferInfo(byId.get(l.transferId)) }));
@@ -114,6 +129,7 @@ function view(state, me, loans, requests) {
     reasons: [...new Set((state.reasons || []).filter((r) => !c.tomb["r:" + r]))],
     people, onMine: onMine.map((p) => p.id),
     approvals,
+    incoming,
     todo: todoFacts(c, loans, today),
     loans: myLoans.slice().sort((a, b) => b.periodKey.localeCompare(a.periodKey) || String(b.updatedAt).localeCompare(String(a.updatedAt))),
     requests: requests.filter((r) => sameName(r.requester, me.name) || c.colleagues.has(low(r.requester)))
@@ -276,14 +292,46 @@ export async function POST(request) {
     const temporary = !!body.temporary;
     const returnDate = str(body.returnDate, 10);
     if (temporary && (!DATE_RE.test(returnDate) || returnDate <= effectiveDate)) return bad("Для тимчасового переведення вкажіть дату повернення, пізнішу за дату переведення.");
+    // Хто віддає людину, той має погодити. Де PM проєкту — сам заявник, там погоджується автоматично.
+    const cur = allocAt(emp, c.transfers, effectiveDate);
+    const approvals = approvalsFor(cur, alloc, c.pms).map((a) => (isPm(c.pms[a.project], me.name)
+      ? { ...a, status: "approved", by: me.name, at: stamp, comment: "подав(ла) заявку" } : a));
+    if (!approvals.length) return bad("Новий розподіл збігається з поточним на цю дату — переводити нікуди.");
+    if (!c.isAdmin && !approvals.some((a) => isPm(c.pms[a.project], me.name))) {
+      return bad("Заявку подає PM проєкту, який приймає людину або з якого її забирають. Ви не PM жодного з проєктів цієї заявки.", 403);
+    }
     const list = ((await readKey(REQUESTS_KEY)) || requests).slice();
     list.push({
       id: uid("rq_pm"), status: "new", source: "pm", requester: me.name, email: "",
-      employee: emp.name, employeeId: emp.id, alloc, effectiveDate, temporary, returnDate: temporary ? returnDate : "",
-      reason: str(body.reason, 200), agreedWith: "", note: str(body.note, 2000),
+      employee: emp.name, employeeId: emp.id, from: cur, alloc, effectiveDate, temporary, returnDate: temporary ? returnDate : "",
+      reason: str(body.reason, 200), agreedWith: "", note: str(body.note, 2000), approvals,
       submittedAt: stamp, createdAt: stamp,
     });
     await writeKey(REQUESTS_KEY, list.slice(-500));
+    return done();
+  }
+
+  /* ── рішення PM проєкту-донора щодо заявки ── */
+  if (body.action === "req-decide") {
+    const project = str(body.project, 120);
+    if (!canAct(project)) return bad("Погоджувати може PM проєкту «" + project + "» або адміністратор.", 403);
+    const list = ((await readKey(REQUESTS_KEY)) || []).slice();
+    const i = list.findIndex((r) => r.id === body.requestId);
+    if (i === -1) return bad("Заявку не знайдено.", 404);
+    const r = list[i];
+    if (r.status !== "new") return bad("Заявку вже опрацював адміністратор.", 409);
+    const a = (r.approvals || []).find((x) => x.project === project && x.role === "give");
+    if (!a) return bad("Ця заявка не забирає людей з проєкту «" + project + "».", 400);
+    // Інший PM цього проєкту вже вирішив — не перезаписуємо мовчки (адміністратор може).
+    if (a.status !== "pending" && a.by && !sameName(a.by, me.name) && !c.isAdmin) return bad("Це вже вирішив(ла) " + a.by + ". Якщо рішення треба змінити, зверніться до адміністратора.", 409);
+    const ok = !!body.ok, comment = str(body.comment, 500);
+    if (!ok && !comment) return bad("Напишіть, чому заперечуєте — заявник і адміністратор побачать коментар.");
+    list[i] = { ...r, approvals: r.approvals.map((x) => (x.project === project && x.role === "give" ? { ...x, status: ok ? "approved" : "rejected", by: me.name, at: stamp, comment } : x)) };
+    await writeKey(REQUESTS_KEY, list);
+    const fresh = (await readState()) || {};
+    fresh.log = [log(ok ? "погодив заявку на переведення" : "заперечив заявку на переведення", r.employee + " · " + project + (comment ? " · " + comment : "")), ...(fresh.log || [])].slice(0, 300);
+    fresh.updatedAt = stamp; fresh.updatedBy = me.name;
+    await writeState(fresh);
     return done();
   }
 

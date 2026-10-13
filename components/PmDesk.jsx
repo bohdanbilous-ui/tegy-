@@ -78,6 +78,7 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
   const mine = useMemo(() => new Set((data && data.myProjects) || []), [data]);
   const isAdmin = data && data.me.role === "admin";
   const pendingApprovals = data ? data.approvals.filter((t) => t.approvals.some((a) => mine.has(a.project) && a.status === "pending")) : [];
+  const incomingPending = data ? (data.incoming || []).filter((r) => r.status === "new" && (r.approvals || []).some((a) => a.role === "give" && mine.has(a.project) && a.status === "pending")) : [];
   const meName = data ? String(data.me.name || "").trim().toLowerCase() : "";
   // Те, що я можу підтвердити: PM проєкту, звідки людина; власні записи — ні (їх підтверджує колега або адміністратор).
   const toConfirm = data ? data.loans.filter((l) => l.status === "pending"
@@ -111,7 +112,7 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
   `;
 
   const TABS = [
-    ["approve", "Погодження", pendingApprovals.length],
+    ["approve", "Погодження", pendingApprovals.length + incomingPending.length],
     ["people", "Люди проєктів", 0],
     ["loans", "Факт по переведеннях", data ? data.todo.length : 0],
     ["confirm", "Підтвердити години", toConfirm.length],
@@ -181,6 +182,8 @@ function Approvals({ data, mine, notes, setNotes, busy, act, card }) {
   const [onlyPending, setOnlyPending] = useState(true);
   const list = data.approvals.filter((t) => !onlyPending || t.approvals.some((a) => mine.has(a.project) && a.status === "pending"));
   return (
+    <>
+    <Incoming data={data} mine={mine} notes={notes} setNotes={setNotes} busy={busy} act={act} card={card} />
     <section style={{ ...card, padding: 20, display: "grid", gap: 14 }}>
       <div style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
         <h2 style={{ margin: 0, fontSize: 17 }}>Переведення ваших проєктів</h2>
@@ -214,6 +217,49 @@ function Approvals({ data, mine, notes, setNotes, busy, act, card }) {
                     <input type="text" placeholder="коментар (для заперечення — обов'язково)" value={notes[key] || ""} onChange={(e) => setNotes((n) => ({ ...n, [key]: e.target.value }))} style={{ flex: "1 1 220px" }} />
                     <button className="ghost" disabled={busy} onClick={() => act({ action: "decide", transferId: t.id, project: a.project, ok: true, comment: notes[key] || "" }, "Погоджено")}>Погодити</button>
                     <button className="ghost" disabled={busy} style={{ color: C.stop }} onClick={() => act({ action: "decide", transferId: t.id, project: a.project, ok: false, comment: notes[key] || "" }, "Заперечення надіслано")}>Заперечити</button>
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </section>
+    </>
+  );
+}
+
+/* ── запити на людей з моїх проєктів (заявки інших PM) ── */
+function Incoming({ data, mine, notes, setNotes, busy, act, card }) {
+  const list = data.incoming || [];
+  if (!list.length) return null;
+  return (
+    <section style={{ ...card, padding: 20, display: "grid", gap: 14 }}>
+      <div>
+        <h2 style={{ margin: 0, fontSize: 17 }}>Запити на людей з ваших проєктів</h2>
+        <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>Інший PM просить людину з вашого проєкту. Ваше слово — до адміністратора: він побачить рішення й створить переведення.</p>
+      </div>
+      {list.map((r) => (
+        <div key={r.id} style={{ border: "1px solid " + C.line, borderRadius: 10, padding: 14, display: "grid", gap: 8 }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
+            <b>{r.employee}</b>
+            <span style={{ color: C.muted, fontSize: 12.5 }}>з {fmt(r.effectiveDate)}{r.temporary ? " тимчасово до " + fmt(r.returnDate) : ""} · просить {r.requester || "—"}</span>
+            {r.status !== "new" && <Pill v={REQ[r.status] || REQ.new} />}
+          </div>
+          <div style={{ fontSize: 13.5 }}>{allocText(r.from)} → <b>{allocText(r.alloc)}</b></div>
+          {(r.reason || r.note) && <div style={{ fontSize: 12.5, color: C.ink2 }}>{[r.reason, r.note].filter(Boolean).join(" · ")}</div>}
+          {(r.approvals || []).filter((a) => a.role === "give" && mine.has(a.project)).map((a) => {
+            const key = r.id + ":" + a.project;
+            return (
+              <div key={a.project} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", background: "#F8FAFC", borderRadius: 8, padding: "8px 10px" }}>
+                <span style={{ fontSize: 13 }}><b>{a.project}</b> віддає {Number(Number(a.delta).toFixed(2))}%</span>
+                <Pill v={APPR[a.status] || APPR.pending} />
+                {a.status !== "pending" && <span style={{ fontSize: 12, color: C.muted }}>{a.by}{a.comment ? " · «" + a.comment + "»" : ""}</span>}
+                {r.status === "new" && (
+                  <>
+                    {a.status === "pending" && <input type="text" placeholder="коментар (для заперечення — обов'язково)" value={notes[key] || ""} onChange={(e) => setNotes((n) => ({ ...n, [key]: e.target.value }))} style={{ flex: "1 1 220px" }} />}
+                    {a.status !== "approved" && <button className="ghost" disabled={busy} onClick={() => act({ action: "req-decide", requestId: r.id, project: a.project, ok: true, comment: notes[key] || "" }, "Погоджено")}>Погодити</button>}
+                    {a.status !== "rejected" && <button className="ghost" disabled={busy} style={{ color: C.stop }} onClick={() => act({ action: "req-decide", requestId: r.id, project: a.project, ok: false, comment: notes[key] || "" }, "Заперечення надіслано")}>Заперечити</button>}
                   </>
                 )}
               </div>
@@ -442,6 +488,13 @@ function Request({ data, busy, act, card, addBtn, label }) {
   const [note, setNote] = useState("");
   const emp = data.people.find((p) => p.name.toLowerCase() === who.trim().toLowerCase());
   const total = rows.reduce((s, r) => s + (Number(r.percent) || 0), 0);
+  const donors = (() => {
+    if (!emp) return [];
+    const cur = {}, nw = {};
+    (emp.alloc || []).forEach((x) => { cur[x.project] = (cur[x.project] || 0) + x.percent; });
+    rows.forEach((x) => { if (x.project) nw[x.project] = (nw[x.project] || 0) + (Number(x.percent) || 0); });
+    return Object.keys(cur).filter((p) => (nw[p] || 0) < cur[p] - 0.01).map((p) => ({ project: p, pm: pmText((data.pms || {})[p]) }));
+  })();
   const send = async () => {
     const ok = await act({ action: "request", employeeId: emp ? emp.id : "", alloc: rows.map((r) => ({ project: r.project, percent: Number(r.percent) })), effectiveDate: date, temporary, returnDate: ret, reason, note },
       "Заявку надіслано адміністратору");
@@ -452,7 +505,7 @@ function Request({ data, busy, act, card, addBtn, label }) {
       <section style={{ ...card, padding: 20, display: "grid", gap: 14 }}>
         <div>
           <h2 style={{ margin: 0, fontSize: 17 }}>Заявка на переведення</h2>
-          <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>Заявка потрапляє адміністратору у «Заявки». Переведення створює адміністратор; статус заявки видно нижче.</p>
+          <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>Спершу заявку погоджує PM проєкту, з якого просять людину (якщо це не ви), потім її розглядає адміністратор і створює переведення. Статус видно нижче.</p>
         </div>
         <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", alignItems: "end" }}>
           <div>
@@ -501,6 +554,11 @@ function Request({ data, busy, act, card, addBtn, label }) {
             <input id="rq-n" type="text" value={note} onChange={(e) => setNote(e.target.value)} placeholder="з ким погоджено, деталі" style={{ width: "100%" }} />
           </div>
         </div>
+        {donors.length > 0 && (
+          <div style={{ fontSize: 12.5, color: C.ink2, background: C.planSoft, borderRadius: 8, padding: "8px 12px" }}>
+            Погодить: {donors.map((d) => d.project + (d.pm ? " (" + d.pm + ")" : " (PM не вказано)")).join("; ")}. Там, де ви PM, погоджено автоматично.
+          </div>
+        )}
         <div>
           <button style={{ ...addBtn, opacity: busy || !emp || Math.abs(total - 100) > 0.01 ? 0.5 : 1 }} disabled={busy || !emp || Math.abs(total - 100) > 0.01} onClick={send}>Надіслати заявку</button>
         </div>
@@ -518,7 +576,13 @@ function Request({ data, busy, act, card, addBtn, label }) {
                     <td>{r.employee}</td>
                     <td>{allocText(r.alloc)}</td>
                     <td className="num">{fmt(r.effectiveDate)}{r.temporary ? " – " + fmt(r.returnDate) : ""}</td>
-                    <td><Pill v={REQ[r.status] || REQ.new} />{r.comment && <div style={{ fontSize: 12, color: C.muted }}>{r.comment}</div>}</td>
+                    <td><Pill v={REQ[r.status] || REQ.new} />{r.status === "new" && (r.approvals || []).some((a) => a.role === "give") && (
+                      <div style={{ fontSize: 12, marginTop: 4, display: "grid", gap: 2 }}>
+                        {(r.approvals || []).filter((a) => a.role === "give").map((a) => (
+                          <span key={a.project} style={{ color: (APPR[a.status] || APPR.pending)[1] }}>{a.project}: {(APPR[a.status] || APPR.pending)[0]}{a.comment && a.status === "rejected" ? " · «" + a.comment + "»" : ""}</span>
+                        ))}
+                      </div>
+                    )}{r.comment && <div style={{ fontSize: 12, color: C.muted }}>{r.comment}</div>}</td>
                   </tr>
                 ))}
               </tbody>
