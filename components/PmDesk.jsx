@@ -3,11 +3,14 @@
    у полі «PM, який погоджує». Тут PM:
      • погоджує або заперечує переведення, що стосуються його проєктів;
      • бачить людей своїх проєктів;
-     • вносить фактично відпрацьовані години людей, яких його проєкт позичив;
-     • підтверджує години своїх людей, яких позичили інші (лише підтверджені впливають на теги);
-     • подає заявку на переведення. */
+     • вносить факт по тимчасових і часткових переведеннях, які приймає його проєкт:
+       скільки годин людина відпрацювала за завершену половину місяця (або «як заплановано»);
+     • підтверджує факт по своїх людях, яких приймають інші проєкти (лише підтверджені години впливають на теги);
+     • подає заявку на переведення.
+   На проєкті може бути кілька PM: будь-хто з них діє від імені проєкту. */
 import React, { useState, useEffect, useMemo } from "react";
-import { normHours } from "../lib/loans";
+import { normHours, lendersOf } from "../lib/loans";
+import { pmText } from "../lib/pms";
 
 const C = {
   paper: "#F5F7FB", surface: "#FFFFFF", ink: "#0F172A", ink2: "#334155",
@@ -75,7 +78,10 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
   const mine = useMemo(() => new Set((data && data.myProjects) || []), [data]);
   const isAdmin = data && data.me.role === "admin";
   const pendingApprovals = data ? data.approvals.filter((t) => t.approvals.some((a) => mine.has(a.project) && a.status === "pending")) : [];
-  const toConfirm = data ? data.loans.filter((l) => l.status === "pending" && (mine.has(l.lenderProject) || isAdmin)) : [];
+  const meName = data ? String(data.me.name || "").trim().toLowerCase() : "";
+  // Те, що я можу підтвердити: PM проєкту, звідки людина; власні записи — ні (їх підтверджує колега або адміністратор).
+  const toConfirm = data ? data.loans.filter((l) => l.status === "pending"
+    && (isAdmin || (lendersOf(l).some((p) => mine.has(p)) && String(l.createdBy || "").trim().toLowerCase() !== meName))) : [];
 
   const card = { background: C.surface, border: "1px solid " + C.line, borderRadius: 10, boxShadow: "0 1px 2px rgba(15,23,42,.04)" };
   const addBtn = { cursor: "pointer", background: C.signal, color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontWeight: 600, whiteSpace: "nowrap" };
@@ -107,7 +113,7 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
   const TABS = [
     ["approve", "Погодження", pendingApprovals.length],
     ["people", "Люди проєктів", 0],
-    ["loans", "Позичені години", 0],
+    ["loans", "Факт по переведеннях", data ? data.todo.length : 0],
     ["confirm", "Підтвердити години", toConfirm.length],
     ["request", "Заявка на переведення", 0],
   ];
@@ -136,7 +142,7 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
           <section style={{ ...card, padding: 24 }}>
             <h2 style={{ margin: 0, fontSize: 17 }}>За вами поки не закріплено жодного проєкту</h2>
             <p style={{ color: C.ink2, marginBottom: 0 }}>
-              Попросіть адміністратора вписати «{user.name}» у поле «PM, який погоджує» потрібного проєкту (Довідник → Проєкти). Ім'я має збігатися буква в букву.
+              Попросіть адміністратора вписати «{user.name}» у поле «PM, який погоджує» потрібного проєкту (Довідник → Проєкти; якщо PM кілька — імена через «;»). Ім'я має збігатися буква в букву.
               Поки що ви можете подати заявку на переведення.
             </p>
           </section>
@@ -156,7 +162,7 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
 
         {data && tab === "approve" && <Approvals data={data} mine={mine} notes={notes} setNotes={setNotes} busy={busy} act={act} card={card} />}
         {data && tab === "people" && <People data={data} mine={mine} q={q} setQ={setQ} card={card} />}
-        {data && tab === "loans" && <Loans data={data} mine={mine} isAdmin={isAdmin} busy={busy} act={act} card={card} addBtn={addBtn} label={label} />}
+        {data && tab === "loans" && <Facts data={data} mine={mine} isAdmin={isAdmin} busy={busy} act={act} card={card} />}
         {data && tab === "confirm" && <Confirm data={data} mine={mine} isAdmin={isAdmin} list={toConfirm} notes={notes} setNotes={setNotes} busy={busy} act={act} card={card} />}
         {data && tab === "request" && <Request data={data} busy={busy} act={act} card={card} addBtn={addBtn} label={label} />}
       </main>
@@ -252,107 +258,104 @@ function People({ data, mine, q, setQ, card }) {
   );
 }
 
-/* ── позичені години: вносить PM, який позичив ── */
-function Loans({ data, mine, isAdmin, busy, act, card, addBtn, label }) {
-  const myList = isAdmin ? [...mine] : data.myProjects;
-  const projOptions = isAdmin ? data.projects : myList;
-  const blank = () => ({ id: "", employeeId: "", project: projOptions[0] || "", periodKey: keyOf(perOfDate(data.today)), hours: "", lenderProject: "", comment: "" });
-  const [f, setF] = useState(blank);
-  const [who, setWho] = useState("");
-  const emp = data.people.find((p) => p.id === f.employeeId);
-  const norm = /^\d{4}-\d{2}-H[12]$/.test(f.periodKey) ? normHours(f.periodKey) : 0;
-  const share = norm && Number(f.hours) > 0 ? Math.round((Number(f.hours) * 1000) / norm) / 10 : 0;
-  const list = data.loans.filter((l) => isAdmin || mine.has(l.project));
-  const pick = (name) => {
-    setWho(name);
-    const p = data.people.find((x) => x.name.toLowerCase() === name.trim().toLowerCase());
-    setF((x) => ({ ...x, employeeId: p ? p.id : "" }));
-  };
-  const edit = (l) => { setF({ id: l.id, employeeId: l.employeeId, project: l.project, periodKey: l.periodKey, hours: String(l.hours), lenderProject: l.lenderProject, comment: l.comment || "" }); setWho(l.employeeName); window.scrollTo({ top: 0, behavior: "smooth" }); };
-  const save = async () => {
-    if (!f.employeeId) return;
-    const ok = await act({ action: "loan-save", ...f, hours: Number(f.hours) }, f.id ? "Запис оновлено — чекає на підтвердження" : "Години внесено — чекають на підтвердження PM проєкту, звідки людина");
-    if (ok) { setF(blank()); setWho(""); }
-  };
-  const lenders = emp ? emp.alloc.map((r) => r.project).filter((p) => p !== f.project) : [];
+/* ── факт по переведеннях: вносить PM проєкту, що приймає людину ── */
+const factText = (l) => (l.hours > 0 ? l.hours + " год" : "як заплановано");
+const transferLine = (t) => (t ? "з " + fmt(t.effectiveDate) + (t.temporary ? " тимчасово до " + fmt(t.returnDate) : "") + ": " + allocText(t.from) + " → " + allocText(t.to) : "переведення видалено");
+const whoConfirms = (data, lenders) => (lenders && lenders.length
+  ? lenders.map((p) => p + " (" + (pmText(data.pms[p]) || "без PM — підтверджує адміністратор") + ")").join("; ")
+  : "адміністратор");
+const primaryBtn = { cursor: "pointer", background: C.signal, color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontWeight: 600, whiteSpace: "nowrap" };
 
+/* Форма факту: скільки годин людина відпрацювала на проєкті або «як заплановано».
+   item — елемент todo (новий запис) або запис loans (редагування). */
+function FactForm({ item, data, busy, act, onDone }) {
+  const [hours, setHours] = useState(item.id && item.hours > 0 ? String(item.hours) : "");
+  const [comment, setComment] = useState(item.comment || "");
+  const norm = normHours(item.periodKey);
+  const h = Number(hours);
+  const share = norm && h > 0 ? Math.round((h * 1000) / norm) / 10 : 0;
+  const lenders = item.lenders || item.lenderProjects || [];
+  const send = async (asPlanned) => {
+    const ok = await act({ action: "loan-save", id: item.id || undefined, transferId: item.transferId, project: item.project, periodKey: item.periodKey, hours: h, asPlanned, comment },
+      "Надіслано на підтвердження: " + whoConfirms(data, lenders));
+    if (ok && onDone) onDone();
+  };
+  const uid = (item.id || item.transferId + item.project + item.periodKey).replace(/[^\w-]/g, "");
+  return (
+    <div style={{ display: "grid", gap: 8 }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <input id={"fh-" + uid} type="number" min="0" step="0.5" placeholder="годин фактично" aria-label="Годин фактично" value={hours}
+          onChange={(e) => setHours(e.target.value)} style={{ width: 150 }} />
+        <span className="num" style={{ fontSize: 12.5, color: C.muted }}>норма періоду {norm} год{share ? " · ≈ " + share + "% від норми" : ""}</span>
+        <input type="text" placeholder="коментар (необов'язково)" aria-label="Коментар" value={comment} onChange={(e) => setComment(e.target.value)} style={{ flex: "1 1 220px" }} />
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <button style={{ ...primaryBtn, opacity: busy || !(h > 0) ? 0.5 : 1 }} disabled={busy || !(h > 0)} onClick={() => send(false)}>Надіслати на підтвердження</button>
+        <button className="ghost" disabled={busy} onClick={() => send(true)} title="Людина відпрацювала стільки, скільки передбачає переведення">Як заплановано</button>
+        {onDone && <button className="link" onClick={onDone}>скасувати</button>}
+        <span style={{ fontSize: 12, color: C.muted }}>Підтверджує: {whoConfirms(data, lenders)}</span>
+      </div>
+    </div>
+  );
+}
+
+function TodoCard({ s, data, busy, act }) {
+  return (
+    <div style={{ border: "1px solid " + C.line, borderRadius: 10, padding: 14, display: "grid", gap: 8 }}>
+      <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
+        <b>{s.employeeName}</b>
+        <span style={{ color: C.muted, fontSize: 12.5 }}>{perLabel(s.periodKey)}</span>
+      </div>
+      <div style={{ fontSize: 13.5 }}>Переведення {transferLine(s.transfer)}</div>
+      <div style={{ fontSize: 12.5, color: C.ink2 }}>
+        План: <b>{s.project} {s.pct}%</b> ≈ <span className="num">{s.planHours} год</span> із {s.norm} год норми періоду
+      </div>
+      <FactForm item={s} data={data} busy={busy} act={act} />
+    </div>
+  );
+}
+
+function Facts({ data, mine, isAdmin, busy, act, card }) {
+  const [editId, setEditId] = useState("");
+  const list = data.loans.filter((l) => isAdmin || mine.has(l.project));
   return (
     <>
       <section style={{ ...card, padding: 20, display: "grid", gap: 14 }}>
         <div>
-          <h2 style={{ margin: 0, fontSize: 17 }}>{f.id ? "Редагувати години" : "Внести фактично відпрацьовані години"}</h2>
+          <h2 style={{ margin: 0, fontSize: 17 }}>Потрібно внести факт {data.todo.length > 0 && <span style={{ color: C.warn }}>· {data.todo.length}</span>}</h2>
           <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>
-            Якщо ваш проєкт позичав людину з іншого проєкту без переведення, внесіть, скільки годин вона фактично відпрацювала у вас за половину місяця.
-            Запис іде на підтвердження PM проєкту, звідки людина. Лише після підтвердження години змінюють тег людини за цей період:
-            частка вашого проєкту = години ÷ усі години людини за період (з табеля, а якщо табель у відсотках — норма робочих годин).
+            Для тимчасових і часткових переведень, які приймає ваш проєкт, після кожної завершеної половини місяця внесіть, скільки годин людина фактично відпрацювала у вас,
+            або натисніть «Як заплановано». Підтверджує PM проєкту, звідки людина. Поки факту немає, тег іде за планом (переведенням). Підтверджені години змінюють тег:
+            частка вашого проєкту = години ÷ усі години людини за період (з табеля, а якщо табель у відсотках — норма робочих годин), решта ділиться пропорційно.
           </p>
         </div>
-        {!projOptions.length ? <p style={{ margin: 0, color: C.warn }}>За вами немає проєктів — вносити години нема від чийого імені.</p> : (
-          <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", alignItems: "end" }}>
-            <div>
-              <label style={label} htmlFor="ln-who">Кого позичили</label>
-              <input id="ln-who" type="text" list="ln-people" value={who} onChange={(e) => pick(e.target.value)} placeholder="почніть вводити ім'я" style={{ width: "100%" }} />
-              <datalist id="ln-people">{data.people.map((p) => <option key={p.id} value={p.name}>{allocText(p.alloc)}</option>)}</datalist>
-              {emp && <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>зараз: {allocText(emp.alloc)}</div>}
-            </div>
-            <div>
-              <label style={label} htmlFor="ln-proj">На ваш проєкт</label>
-              <select id="ln-proj" value={f.project} onChange={(e) => setF((x) => ({ ...x, project: e.target.value }))} style={{ width: "100%" }}>
-                {projOptions.map((p) => <option key={p} value={p}>{p}</option>)}
-              </select>
-            </div>
-            <div>
-              <label style={label}>Період</label>
-              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                <button className="ghost" onClick={() => setF((x) => ({ ...x, periodKey: shift(x.periodKey, -1) }))} aria-label="Попередній період">←</button>
-                <span className="num" style={{ fontWeight: 600, flex: 1, textAlign: "center", fontSize: 13 }}>{perLabel(f.periodKey)}</span>
-                <button className="ghost" onClick={() => setF((x) => ({ ...x, periodKey: shift(x.periodKey, 1) }))} aria-label="Наступний період">→</button>
-              </div>
-            </div>
-            <div>
-              <label style={label} htmlFor="ln-h">Годин фактично</label>
-              <input id="ln-h" type="number" min="0" step="0.5" value={f.hours} onChange={(e) => setF((x) => ({ ...x, hours: e.target.value }))} style={{ width: "100%" }} />
-              <div className="num" style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>норма періоду {norm} год{share ? " · ≈ " + share + "% від норми" : ""}</div>
-            </div>
-            <div>
-              <label style={label} htmlFor="ln-from">Звідки позичили</label>
-              <select id="ln-from" value={f.lenderProject} onChange={(e) => setF((x) => ({ ...x, lenderProject: e.target.value }))} style={{ width: "100%" }}>
-                <option value="">визначити автоматично</option>
-                {[...new Set([...lenders, ...data.projects.filter((p) => p !== f.project)])].map((p) => <option key={p} value={p}>{p}{data.pms[p] ? " · PM " + data.pms[p] : " · без PM"}</option>)}
-              </select>
-            </div>
-            <div style={{ gridColumn: "1 / -1" }}>
-              <label style={label} htmlFor="ln-c">Коментар</label>
-              <input id="ln-c" type="text" value={f.comment} onChange={(e) => setF((x) => ({ ...x, comment: e.target.value }))} placeholder="над чим працювала людина, домовленість тощо" style={{ width: "100%" }} />
-            </div>
-            <div style={{ display: "flex", gap: 10, gridColumn: "1 / -1" }}>
-              <button style={{ ...addBtn, opacity: busy || !f.employeeId || !(Number(f.hours) > 0) ? 0.5 : 1 }} disabled={busy || !f.employeeId || !(Number(f.hours) > 0)} onClick={save}>
-                {f.id ? "Зберегти й надіслати на підтвердження" : "Надіслати на підтвердження"}
-              </button>
-              {f.id && <button className="ghost" onClick={() => { setF(blank()); setWho(""); }}>Скасувати</button>}
-            </div>
-          </div>
-        )}
+        {!data.todo.length && <p style={{ margin: 0, color: C.muted }}>Нічого вносити: за завершеними періодами всі тимчасові й часткові переведення ваших проєктів уже мають факт.</p>}
+        {data.todo.map((s) => <TodoCard key={s.transferId + s.project + s.periodKey} s={s} data={data} busy={busy} act={act} />)}
       </section>
 
       <section style={{ ...card, overflow: "hidden" }}>
-        <div style={{ padding: "14px 20px", borderBottom: "1px solid " + C.lineSoft }}><h2 style={{ margin: 0, fontSize: 16 }}>Внесені години</h2></div>
+        <div style={{ padding: "14px 20px", borderBottom: "1px solid " + C.lineSoft }}><h2 style={{ margin: 0, fontSize: 16 }}>Внесений факт</h2></div>
         <div className="scroll">
           <table>
-            <thead><tr><th>Період</th><th>Людина</th><th>Звідки → куди</th><th>Годин</th><th>Статус</th><th /></tr></thead>
+            <thead><tr><th>Період</th><th>Людина</th><th>Переведення</th><th>Факт</th><th>Статус</th><th /></tr></thead>
             <tbody>
               {list.map((l) => (
-                <tr key={l.id}>
-                  <td className="num" style={{ whiteSpace: "nowrap" }}>{perLabel(l.periodKey)}</td>
-                  <td>{l.employeeName}{l.comment && <div style={{ fontSize: 12, color: C.muted }}>{l.comment}</div>}</td>
-                  <td>{l.lenderProject} → <b>{l.project}</b><div style={{ fontSize: 12, color: C.muted }}>підтверджує {data.pms[l.lenderProject] || "адміністратор (у проєкту немає PM)"}</div></td>
-                  <td className="num">{l.hours}</td>
-                  <td><Pill v={LOAN[l.status]} />{l.decidedBy && <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{l.decidedBy}, {fmtDT(l.decidedAt)}{l.decisionComment ? " · «" + l.decisionComment + "»" : ""}</div>}</td>
-                  <td style={{ whiteSpace: "nowrap" }}>
-                    {l.status !== "confirmed" && <button className="link" onClick={() => edit(l)}>змінити</button>}
-                    {l.status !== "confirmed" && <> · <button className="link" style={{ color: C.stop }} disabled={busy} onClick={() => window.confirm("Прибрати запис?") && act({ action: "loan-delete", id: l.id }, "Запис прибрано")}>прибрати</button></>}
-                  </td>
-                </tr>
+                <React.Fragment key={l.id}>
+                  <tr>
+                    <td className="num" style={{ whiteSpace: "nowrap" }}>{perLabel(l.periodKey)}</td>
+                    <td>{l.employeeName}{l.comment && <div style={{ fontSize: 12, color: C.muted }}>{l.comment}</div>}</td>
+                    <td style={{ fontSize: 12.5 }}>{transferLine(l.transfer)}<div style={{ color: C.muted }}>підтверджує {whoConfirms(data, l.lenderProjects)}</div></td>
+                    <td className="num"><b>{l.project}</b>: {factText(l)}{l.hours > 0 && <div style={{ fontSize: 12, color: C.muted }}>≈ {Math.round((l.hours * 1000) / normHours(l.periodKey)) / 10}% норми{l.planHours ? ", план ≈ " + l.planHours + " год" : ""}</div>}</td>
+                    <td><Pill v={LOAN[l.status]} />{l.decidedBy && <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{l.decidedBy}, {fmtDT(l.decidedAt)}{l.decisionComment ? " · «" + l.decisionComment + "»" : ""}</div>}</td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      {l.status !== "confirmed" && <button className="link" onClick={() => setEditId(editId === l.id ? "" : l.id)}>змінити</button>}
+                      {l.status !== "confirmed" && <> · <button className="link" style={{ color: C.stop }} disabled={busy} onClick={() => window.confirm("Прибрати запис?") && act({ action: "loan-delete", id: l.id }, "Запис прибрано")}>прибрати</button></>}
+                    </td>
+                  </tr>
+                  {editId === l.id && (
+                    <tr><td colSpan={6} style={{ background: "#F8FAFC" }}><FactForm item={l} data={data} busy={busy} act={act} onDone={() => setEditId("")} /></td></tr>
+                  )}
+                </React.Fragment>
               ))}
               {!list.length && <tr><td colSpan={6} style={{ color: C.muted }}>Ще нічого не внесено.</td></tr>}
             </tbody>
@@ -363,36 +366,39 @@ function Loans({ data, mine, isAdmin, busy, act, card, addBtn, label }) {
   );
 }
 
-/* ── підтвердження годин: PM проєкту, звідки людина ── */
+/* ── підтвердження факту: PM проєкту, звідки людина ── */
 function Confirm({ data, mine, isAdmin, list, notes, setNotes, busy, act, card }) {
-  const decided = data.loans.filter((l) => l.status !== "pending" && (mine.has(l.lenderProject) || isAdmin)).slice(0, 60);
+  const meName = String((data.me && data.me.name) || "").trim().toLowerCase();
+  const own = (l) => String(l.createdBy || "").trim().toLowerCase() === meName;
+  const decided = data.loans.filter((l) => l.status !== "pending" && (isAdmin || lendersOf(l).some((p) => mine.has(p)))).slice(0, 60);
   return (
     <>
       <section style={{ ...card, padding: 20, display: "grid", gap: 12 }}>
         <div>
-          <h2 style={{ margin: 0, fontSize: 17 }}>Години ваших людей на інших проєктах</h2>
+          <h2 style={{ margin: 0, fontSize: 17 }}>Факт по ваших людях на інших проєктах</h2>
           <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>
-            Інший PM вніс, скільки годин людина з вашого проєкту фактично відпрацювала в нього. Після вашого підтвердження ці години змінять тег людини за період:
-            частка іншого проєкту зросте, а частки ваших проєктів пропорційно зменшаться.
+            PM проєкту, який приймає людину, вніс, скільки годин вона фактично відпрацювала в нього за період. Після вашого підтвердження ці години змінять тег людини:
+            частка проєкту, що приймає, стане за фактом, а решта піде вашим проєктам. Підтвердити може будь-хто з PM проєкту; власні записи підтверджувати не можна.
           </p>
         </div>
         {!list.length && <p style={{ margin: 0, color: C.muted }}>Нічого не чекає на підтвердження.</p>}
         {list.map((l) => {
-          const share = Math.round((l.hours * 1000) / normHours(l.periodKey)) / 10;
+          const share = l.hours > 0 ? Math.round((l.hours * 1000) / normHours(l.periodKey)) / 10 : 0;
           return (
             <div key={l.id} style={{ border: "1px solid " + C.line, borderRadius: 10, padding: 14, display: "grid", gap: 8 }}>
               <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
                 <b>{l.employeeName}</b>
                 <span style={{ color: C.muted, fontSize: 12.5 }}>{perLabel(l.periodKey)} · вніс(ла) {l.createdBy}{l.updatedAt ? ", " + fmtDT(l.updatedAt) : ""}</span>
               </div>
+              <div style={{ fontSize: 12.5, color: C.ink2 }}>Переведення {transferLine(l.transfer)}</div>
               <div style={{ fontSize: 13.5 }}>
-                {l.lenderProject} → <b>{l.project}</b>: <b className="num">{l.hours} год</b>
-                <span style={{ color: C.muted }}> (≈ {share}% норми {normHours(l.periodKey)} год)</span>
+                {lendersOf(l).join(" + ")} → <b>{l.project}</b>: <b className="num">{factText(l)}</b>
+                {l.hours > 0 && <span style={{ color: C.muted }}> (≈ {share}% норми {normHours(l.periodKey)} год{l.planHours ? ", за планом ≈ " + l.planHours + " год" : ""})</span>}
               </div>
               {l.comment && <div style={{ fontSize: 12.5, color: C.ink2 }}>«{l.comment}»</div>}
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <input type="text" placeholder="коментар (для відхилення — обов'язково)" value={notes[l.id] || ""} onChange={(e) => setNotes((n) => ({ ...n, [l.id]: e.target.value }))} style={{ flex: "1 1 240px" }} />
-                <button className="ghost" disabled={busy} onClick={() => act({ action: "loan-decide", id: l.id, ok: true, comment: notes[l.id] || "" }, "Підтверджено — години враховано в тегу")}>Підтвердити</button>
+                <button className="ghost" disabled={busy} onClick={() => act({ action: "loan-decide", id: l.id, ok: true, comment: notes[l.id] || "" }, l.hours > 0 ? "Підтверджено — години враховано в тегу" : "Підтверджено — за планом")}>Підтвердити</button>
                 <button className="ghost" style={{ color: C.stop }} disabled={busy} onClick={() => act({ action: "loan-decide", id: l.id, ok: false, comment: notes[l.id] || "" }, "Відхилено")}>Відхилити</button>
               </div>
             </div>
@@ -404,16 +410,16 @@ function Confirm({ data, mine, isAdmin, list, notes, setNotes, busy, act, card }
           <div style={{ padding: "14px 20px", borderBottom: "1px solid " + C.lineSoft }}><h2 style={{ margin: 0, fontSize: 16 }}>Ухвалені рішення</h2></div>
           <div className="scroll">
             <table>
-              <thead><tr><th>Період</th><th>Людина</th><th>Куди</th><th>Годин</th><th>Рішення</th><th /></tr></thead>
+              <thead><tr><th>Період</th><th>Людина</th><th>Куди</th><th>Факт</th><th>Рішення</th><th /></tr></thead>
               <tbody>
                 {decided.map((l) => (
                   <tr key={l.id}>
                     <td className="num" style={{ whiteSpace: "nowrap" }}>{perLabel(l.periodKey)}</td>
                     <td>{l.employeeName}</td>
                     <td>{l.project}</td>
-                    <td className="num">{l.hours}</td>
+                    <td className="num">{factText(l)}</td>
                     <td><Pill v={LOAN[l.status]} /> <span style={{ fontSize: 12, color: C.muted }}>{l.decidedBy}</span></td>
-                    <td><button className="link" disabled={busy} onClick={() => window.confirm("Зняти рішення? Запис знову чекатиме на підтвердження, а підтверджені години перестануть впливати на тег.") && act({ action: "loan-reopen", id: l.id }, "Рішення знято")}>зняти рішення</button></td>
+                    <td>{(isAdmin || !own(l)) && <button className="link" disabled={busy} onClick={() => window.confirm("Зняти рішення? Запис знову чекатиме на підтвердження, а підтверджені години перестануть впливати на тег.") && act({ action: "loan-reopen", id: l.id }, "Рішення знято")}>зняти рішення</button>}</td>
                   </tr>
                 ))}
               </tbody>
@@ -501,14 +507,14 @@ function Request({ data, busy, act, card, addBtn, label }) {
       </section>
       {data.requests.length > 0 && (
         <section style={{ ...card, overflow: "hidden" }}>
-          <div style={{ padding: "14px 20px", borderBottom: "1px solid " + C.lineSoft }}><h2 style={{ margin: 0, fontSize: 16 }}>Мої заявки</h2></div>
+          <div style={{ padding: "14px 20px", borderBottom: "1px solid " + C.lineSoft }}><h2 style={{ margin: 0, fontSize: 16 }}>Заявки мої й колег-PM</h2></div>
           <div className="scroll">
             <table>
               <thead><tr><th>Подано</th><th>Людина</th><th>Розподіл</th><th>З дати</th><th>Статус</th></tr></thead>
               <tbody>
                 {data.requests.map((r) => (
                   <tr key={r.id}>
-                    <td className="num" style={{ whiteSpace: "nowrap" }}>{fmtDT(r.createdAt)}</td>
+                    <td className="num" style={{ whiteSpace: "nowrap" }}>{fmtDT(r.createdAt)}{!r.own && <div style={{ fontSize: 12, color: C.muted }}>подав(ла) {r.requester}</div>}</td>
                     <td>{r.employee}</td>
                     <td>{allocText(r.alloc)}</td>
                     <td className="num">{fmt(r.effectiveDate)}{r.temporary ? " – " + fmt(r.returnDate) : ""}</td>
@@ -524,7 +530,7 @@ function Request({ data, busy, act, card, addBtn, label }) {
   );
 }
 
-/* ── для адміністратора: усі записи позичання (вкладка «Переведення → Позичання годин») ── */
+/* ── для адміністратора: увесь факт по переведеннях (вкладка «Переведення → Факт по переведеннях») ── */
 export function LoansAdmin({ token, onChanged, setToast }) {
   const [data, setData] = useState(null);
   const [status, setStatus] = useState("pending");
@@ -535,67 +541,77 @@ export function LoansAdmin({ token, onChanged, setToast }) {
   useEffect(() => { load(); }, [token]);
   async function act(body, okText) {
     setBusy(true);
-    try { setData(await call(token, "POST", body)); if (okText && setToast) setToast(okText); onChanged && onChanged(); }
-    catch (e) { setToast && setToast(e.message); }
+    try { setData(await call(token, "POST", body)); if (okText && setToast) setToast(okText); onChanged && onChanged(); return true; }
+    catch (e) { setToast && setToast(e.message); return false; }
     finally { setBusy(false); }
   }
   const card = { background: C.surface, border: "1px solid " + C.line, borderRadius: 10, boxShadow: "0 1px 2px rgba(15,23,42,.04)" };
   if (!data) return <section style={{ ...card, padding: 24, color: C.muted }}>Завантажуємо…</section>;
   const ql = q.trim().toLowerCase();
-  const list = data.loans.filter((l) => (status === "all" || l.status === status) && (!ql || (l.employeeName + " " + l.project + " " + l.lenderProject).toLowerCase().includes(ql)));
+  const hit = (name, project, lenders) => !ql || (name + " " + project + " " + (lenders || []).join(" ")).toLowerCase().includes(ql);
+  const list = data.loans.filter((l) => (status === "all" || l.status === status) && hit(l.employeeName, l.project, l.lenderProjects));
+  const todo = data.todo.filter((s) => hit(s.employeeName, s.project, s.lenders));
   const count = (k) => data.loans.filter((l) => l.status === k).length;
   return (
     <section style={{ ...card, overflow: "hidden" }}>
       <div style={{ padding: "16px 20px", borderBottom: "1px solid " + C.lineSoft, display: "grid", gap: 10 }}>
-        <h2 style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>Позичання годин між проєктами</h2>
+        <h2 style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>Факт по тимчасових і часткових переведеннях</h2>
         <p style={{ margin: 0, color: C.muted, fontSize: 12.5 }}>
-          PM проєкту, який позичив людину, вносить фактично відпрацьовані години за половину місяця; PM проєкту, звідки людина, підтверджує.
-          Лише підтверджені години змінюють тег у фін. обліку й відомостях ЗП: частка проєкту-позичальника = години ÷ усі години людини за період
-          (з табеля в годинах, інакше норма — будні × 8), решта ділиться пропорційно звичайному розподілу. Закриті місяці не змінюються.
-          Ви можете підтвердити або відхилити будь-який запис.
+          Переведення — це план. Після кожної завершеної половини місяця PM проєкту, що приймає людину, вносить фактично відпрацьовані години (або «як заплановано»),
+          а PM проєкту, звідки людина, підтверджує (достатньо будь-кого з PM проєкту). До підтвердження тег іде за планом. Лише підтверджені години змінюють тег
+          у фін. обліку й відомостях ЗП: частка проєкту, що приймає, = години ÷ усі години людини за період (з табеля в годинах, інакше норма — будні × 8),
+          решта ділиться пропорційно. Закриті місяці не змінюються. Ви можете внести, підтвердити або відхилити будь-який запис.
         </p>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-          {[["pending", "Чекають · " + count("pending")], ["confirmed", "Підтверджені · " + count("confirmed")], ["rejected", "Відхилені · " + count("rejected")], ["all", "Усі"]].map(([k, l]) => (
+          {[["todo", "Чекають на факт · " + data.todo.length], ["pending", "Чекають на підтвердження · " + count("pending")], ["confirmed", "Підтверджені · " + count("confirmed")], ["rejected", "Відхилені · " + count("rejected")], ["all", "Усі внесені"]].map(([k, l]) => (
             <button key={k} className="ghost" aria-pressed={status === k} onClick={() => setStatus(k)}
               style={{ background: status === k ? C.ink : C.surface, color: status === k ? "#fff" : C.ink2 }}>{l}</button>
           ))}
           <input type="text" placeholder="пошук" value={q} onChange={(e) => setQ(e.target.value)} style={{ marginLeft: "auto", width: 220 }} />
         </div>
       </div>
-      <div style={{ overflowX: "auto" }}>
-        <table>
-          <thead><tr><th>Період</th><th>Людина</th><th>Звідки → куди</th><th>Годин</th><th>Вніс</th><th>Статус</th><th /></tr></thead>
-          <tbody>
-            {list.map((l) => (
-              <tr key={l.id}>
-                <td className="num" style={{ whiteSpace: "nowrap" }}>{perLabel(l.periodKey)}</td>
-                <td>{l.employeeName}{l.comment && <div style={{ fontSize: 12, color: C.muted }}>«{l.comment}»</div>}</td>
-                <td>{l.lenderProject} → <b>{l.project}</b><div style={{ fontSize: 12, color: C.muted }}>підтверджує {data.pms[l.lenderProject] || "адміністратор"}</div></td>
-                <td className="num">{l.hours}<div style={{ fontSize: 12, color: C.muted }}>норма {normHours(l.periodKey)}</div></td>
-                <td style={{ fontSize: 12.5 }}>{l.createdBy}<div style={{ color: C.muted }}>{fmtDT(l.updatedAt)}</div></td>
-                <td><Pill v={LOAN[l.status]} />{l.decidedBy && <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{l.decidedBy}{l.decisionComment ? " · «" + l.decisionComment + "»" : ""}</div>}</td>
-                <td style={{ minWidth: 230 }}>
-                  {l.status === "pending" ? (
-                    <div style={{ display: "grid", gap: 6 }}>
-                      <input type="text" placeholder="коментар" value={notes[l.id] || ""} onChange={(e) => setNotes((n) => ({ ...n, [l.id]: e.target.value }))} />
-                      <div style={{ display: "flex", gap: 10 }}>
-                        <button className="link" disabled={busy} onClick={() => act({ action: "loan-decide", id: l.id, ok: true, comment: notes[l.id] || "" }, "Підтверджено")}>підтвердити</button>
-                        <button className="link" disabled={busy} style={{ color: C.stop }} onClick={() => act({ action: "loan-decide", id: l.id, ok: false, comment: notes[l.id] || "" }, "Відхилено")}>відхилити</button>
+
+      {status === "todo" ? (
+        <div style={{ padding: 20, display: "grid", gap: 12 }}>
+          {!todo.length && <p style={{ margin: 0, color: C.muted }}>{ql ? "Нічого не знайдено." : "Усі завершені періоди мають факт."}</p>}
+          {todo.map((s) => <TodoCard key={s.transferId + s.project + s.periodKey} s={s} data={data} busy={busy} act={act} />)}
+        </div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table>
+            <thead><tr><th>Період</th><th>Людина</th><th>Переведення</th><th>Факт</th><th>Вніс</th><th>Статус</th><th /></tr></thead>
+            <tbody>
+              {list.map((l) => (
+                <tr key={l.id}>
+                  <td className="num" style={{ whiteSpace: "nowrap" }}>{perLabel(l.periodKey)}</td>
+                  <td>{l.employeeName}{l.comment && <div style={{ fontSize: 12, color: C.muted }}>«{l.comment}»</div>}</td>
+                  <td style={{ fontSize: 12.5 }}>{transferLine(l.transfer)}<div style={{ color: C.muted }}>підтверджує {whoConfirms(data, l.lenderProjects)}</div></td>
+                  <td className="num"><b>{l.project}</b>: {factText(l)}<div style={{ fontSize: 12, color: C.muted }}>норма {normHours(l.periodKey)}{l.planHours ? ", план ≈ " + l.planHours : ""}</div></td>
+                  <td style={{ fontSize: 12.5 }}>{l.createdBy}<div style={{ color: C.muted }}>{fmtDT(l.updatedAt)}</div></td>
+                  <td><Pill v={LOAN[l.status]} />{l.decidedBy && <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{l.decidedBy}{l.decisionComment ? " · «" + l.decisionComment + "»" : ""}</div>}</td>
+                  <td style={{ minWidth: 230 }}>
+                    {l.status === "pending" ? (
+                      <div style={{ display: "grid", gap: 6 }}>
+                        <input type="text" placeholder="коментар" value={notes[l.id] || ""} onChange={(e) => setNotes((n) => ({ ...n, [l.id]: e.target.value }))} />
+                        <div style={{ display: "flex", gap: 10 }}>
+                          <button className="link" disabled={busy} onClick={() => act({ action: "loan-decide", id: l.id, ok: true, comment: notes[l.id] || "" }, "Підтверджено")}>підтвердити</button>
+                          <button className="link" disabled={busy} style={{ color: C.stop }} onClick={() => act({ action: "loan-decide", id: l.id, ok: false, comment: notes[l.id] || "" }, "Відхилено")}>відхилити</button>
+                        </div>
                       </div>
-                    </div>
-                  ) : (
-                    <div style={{ display: "flex", gap: 10 }}>
-                      <button className="link" disabled={busy} onClick={() => act({ action: "loan-reopen", id: l.id }, "Рішення знято")}>зняти рішення</button>
-                      <button className="link" disabled={busy} style={{ color: C.stop }} onClick={() => window.confirm("Видалити запис назавжди?") && act({ action: "loan-delete", id: l.id }, "Видалено")}>видалити</button>
-                    </div>
-                  )}
-                </td>
-              </tr>
-            ))}
-            {!list.length && <tr><td colSpan={7} style={{ color: C.muted }}>Записів немає.</td></tr>}
-          </tbody>
-        </table>
-      </div>
+                    ) : (
+                      <div style={{ display: "flex", gap: 10 }}>
+                        <button className="link" disabled={busy} onClick={() => act({ action: "loan-reopen", id: l.id }, "Рішення знято")}>зняти рішення</button>
+                        <button className="link" disabled={busy} style={{ color: C.stop }} onClick={() => window.confirm("Видалити запис назавжди?") && act({ action: "loan-delete", id: l.id }, "Видалено")}>видалити</button>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {!list.length && <tr><td colSpan={7} style={{ color: C.muted }}>Записів немає.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
     </section>
   );
 }

@@ -7,6 +7,7 @@ import { api } from "../lib/api";
 import { workingOn } from "../lib/people";
 import { orderProjects, isInactive } from "../lib/projects";
 import { applyLoans, confirmedIndex, normHours, loanText } from "../lib/loans";
+import { pmList, isPm, pmNormalize, pmText } from "../lib/pms";
 import TeamDesk from "./TeamDesk";
 import Reminders from "./Reminders";
 import PayDesk from "./PayDesk";
@@ -453,7 +454,7 @@ export default function TransferDesk() {
   const [fin, setFin] = useState([]);
   // Довідник FPV — окремі люди поза PeopleForce, що входять у відомості ЗП (лише адміністратор).
   const [fpv, setFpv] = useState([]);
-  // Позичання годин між проєктами (окремий ключ на сервері, лише читання тут; підтверджені змінюють теги).
+  // Факт по тимчасових і часткових переведеннях (окремий ключ на сервері, лише читання тут; підтверджені години змінюють теги).
   const [loans, setLoans] = useState([]);
   const [finMonth, setFinMonth] = useState(() => { const d = todayISO(); return { y: +d.slice(0, 4), m: +d.slice(5, 7) }; });
   const [finTeam, setFinTeam] = useState("all");
@@ -726,8 +727,8 @@ export default function TransferDesk() {
   // Бухгалтер працює лише у відомостях ЗП.
   useEffect(() => { if (isAcc && tab !== "pay" && tab !== "lists") setTab("pay"); }, [isAcc, tab]);
   useEffect(() => { if (isAcc && !["legal", "fpv"].includes(book)) setBook("legal"); }, [isAcc, book]);
-  const allPMs = useMemo(() => uniq(Object.values(pms)), [pms]);
-  const isPMof = (project) => !!user && (pms[project] || "").toLowerCase() === user.name.toLowerCase();
+  const allPMs = useMemo(() => uniq(Object.values(pms).flatMap(pmList)), [pms]);
+  const isPMof = (project) => !!user && isPm(pms[project], user.name);
   const canDecide = (a) => isAdmin || isPMof(a.project);
   const owns = (t) => !!user && ((t.partnerEmail && user.email && t.partnerEmail === user.email)
     || (t.partner || "").toLowerCase() === user.name.toLowerCase());
@@ -999,7 +1000,11 @@ export default function TransferDesk() {
   const allocIn = (empId, key) => (entryOf(empId, key) || {}).alloc || [];
   /* Підтверджені години позичання за половину місяця: частка проєкту-позичальника =
      години ÷ усі години людини за період (з табеля в годинах, інакше норма), решта — пропорційно. */
-  const loanIdx = useMemo(() => confirmedIndex(loans), [loans]);
+  // Факт скасованого переведення тег не змінює.
+  const loanIdx = useMemo(() => {
+    const live = new Set(transfers.filter((t) => !t.cancelled).map((t) => t.id));
+    return confirmedIndex(loans.filter((l) => !l.transferId || live.has(l.transferId)));
+  }, [loans, transfers]);
   const loanAdj = (empId, key, alloc) => {
     const list = loanIdx.get(empId + "|" + key);
     if (!list || !list.length) return { alloc, applied: false, text: "" };
@@ -1840,7 +1845,9 @@ export default function TransferDesk() {
     pushLog("прибрав співробітника", e?.name || id);
   }
   const renameIn = (a, oldName, name) => asAlloc(a).map((x) => (x.project === oldName ? { ...x, project: name } : x));
-  function setPM(project, pm) {
+  function setPM(project, raw) {
+    const pm = pmNormalize(raw); // кілька PM — через «;», зайві пробіли й дублі прибираємо
+    if (pm === (pms[project] || "")) return;
     setPms((p) => ({ ...p, [project]: pm }));
     setTransfers((p) => p.map((t) => {
       const list = t.approvals || [];
@@ -2195,7 +2202,7 @@ export default function TransferDesk() {
           form: "Нове переведення", journal: "Журнал",
           approve: "Погодження" + (myPending.length ? " · " + myPending.length : ""),
           req: "Заявки" + (newRequests.length ? " · " + newRequests.length : ""),
-          loans: "Позичання годин" + (loansPending ? " · " + loansPending : ""),
+          loans: "Факт по переведеннях" + (loansPending ? " · " + loansPending : ""),
           teams: "Табель команд", remind: "Нагадування", fin: "Місяць · фін. облік", report: "Звіт по місяцях",
           snap: "Зріз на дату", lists: "Довідник", pay: "Відомості ЗП",
         };
@@ -2645,7 +2652,7 @@ export default function TransferDesk() {
                             {a.role === "give" ? "віддає" : "приймає"} {round2(a.delta)}%
                             {!isRequired(a, mode) && " · до відома"}
                           </span>
-                          <span style={{ color: C.muted, fontSize: 12.5 }}>PM: {a.pm || "не призначений"}</span>
+                          <span style={{ color: C.muted, fontSize: 12.5 }}>PM: {pmText(a.pm) || "не призначений"}</span>
                           <span style={{ marginLeft: "auto", background: APPROVAL[a.status === "pending" ? "pending" : a.status === "approved" ? "approved" : "rejected"].bg,
                             color: APPROVAL[a.status === "pending" ? "pending" : a.status === "approved" ? "approved" : "rejected"].fg,
                             borderRadius: 999, padding: "2px 9px", fontSize: 12, fontWeight: 600 }}>
@@ -3786,7 +3793,7 @@ export default function TransferDesk() {
                                 style={{ padding: "7px 9px" }} />
                             </td>
                             <td>
-                              <TextCell value={pms[p] || ""} placeholder="ім'я PM" aria={"PM проєкту " + p} onCommit={(v) => setPM(p, v)} />
+                              <TextCell value={pms[p] || ""} placeholder="ім'я PM; ще один PM" aria={"PM проєкту " + p} onCommit={(v) => setPM(p, v)} />
                             </td>
                             <td className="num">{onProject(p) || "—"}</td>
                             <td className="num">{fteOn(p) ? round2(fteOn(p)) : "—"}</td>
@@ -3863,8 +3870,9 @@ export default function TransferDesk() {
                 </div>
 
                 <p style={{ color: C.muted, fontSize: 12.5, marginTop: 24 }}>
-                  PM призначаються у вкладці «Проєкти». Проєкт без PM нікому погоджувати — такі записи підсвічуються в «Погодженні».
-                  {allProjects.filter((x) => !pms[x]).length > 0 && " Зараз без PM: " + allProjects.filter((x) => !pms[x]).length + "."}
+                  PM призначаються у вкладці «Проєкти». На проєкті може бути кілька PM — впишіть імена через «;» (наприклад, «Іваненко Іван; Петренко Петро»):
+                  погодити переведення чи підтвердити години може будь-хто з них. Проєкт без PM нікому погоджувати — такі записи підсвічуються в «Погодженні».
+                  {allProjects.filter((x) => !pmList(pms[x]).length).length > 0 && " Зараз без PM: " + allProjects.filter((x) => !pmList(pms[x]).length).length + "."}
                 </p>
               </section>
             )}
@@ -4286,7 +4294,7 @@ function UsersBook({ token, me }) {
                         patch(u.username, { role: r }, "Змінити роль «" + u.displayName + "» на «" + ROLE_LABEL[r] + "»?" +
                           (r === "admin" ? " Адміністратор бачить і править усе." : r === "hrd" ? " HRD проводитиме переведення й вестиме табель своєї команди."
                             : r === "accountant" ? " Бухгалтер бачитиме лише відомості ЗП з ІПН і вестиме їх: розподіл, юрособи, Штат/Гіг, довідник FPV."
-                            : r === "pm" ? " PM погоджуватиме переведення своїх проєктів, вноситиме години позичених людей і підтверджуватиме години своїх. Його ім'я має стояти в полі «PM, який погоджує» проєкту." : ""));
+                            : r === "pm" ? " PM погоджуватиме переведення своїх проєктів, вноситиме факт (години) по людях, яких приймає його проєкт, і підтверджуватиме факт по своїх людях. Його ім'я має стояти в полі «PM, який погоджує» проєкту (PM може бути кілька, через «;»)." : ""));
                       }}
                       style={{ padding: "6px 8px", minWidth: 170 }}
                     >
