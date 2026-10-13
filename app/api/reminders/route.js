@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import crypto from "crypto";
 import { readState, readKey, writeKey } from "../../../lib/store";
 import { whoIs } from "../../../lib/auth";
+import { pmDigest, pmText } from "../../../lib/pmdigest";
+import { LOANS_KEY } from "../../../lib/loans";
+import { sameName } from "../../../lib/users";
 import { KEY, normalize, kyivNow, periodOfDate, shiftPeriod, periodLabel, periodStatus, buildTargets, autoPeriodFor, DEFAULT_TEMPLATE } from "../../../lib/reminders";
 
 export const dynamic = "force-dynamic";
@@ -34,13 +37,23 @@ async function admin(request) {
   return { me };
 }
 const load = async () => normalize(await readKey(KEY));
-const view = (cfg, state, key) => ({
+const REQUESTS_KEY = "transfers:requests:v1";
+const slackOf = (cfg, name) => Object.entries(cfg.slack).find(([n]) => sameName(n, name))?.[1] || "";
+// Сповіщення PM: хто що має зробити зараз (лише ті, кому є що).
+async function pmTargets(cfg, state, only) {
+  const rows = pmDigest(state, (await readKey(LOANS_KEY)) || [], (await readKey(REQUESTS_KEY)) || [], kyivNow().date);
+  return rows.filter((r) => r.total > 0 && (!only || only.some((n) => sameName(n, r.name))))
+    .map((r) => ({ name: r.name, slackId: slackOf(cfg, r.name), counts: { requests: r.requests, approvals: r.approvals, facts: r.facts, confirms: r.confirms }, teams: [], text: pmText(r, URL_APP) }));
+}
+const pmView = async (cfg, state) => ({ pmAuto: cfg.pmAuto, pmTargets: await pmTargets(cfg, state) });
+const viewBase = (cfg, state, key) => ({
   template: cfg.template, defaultTemplate: DEFAULT_TEMPLATE, slack: cfg.slack, auto: cfg.auto,
   periodKey: key, periodLabel: periodLabel(key), status: periodStatus(state, key),
   targets: buildTargets(cfg, state, key, URL_APP),
   jobs: cfg.jobs.slice(-30).reverse(), keyReady: (process.env.REMINDER_SECRET || "").length >= 16,
   updatedAt: cfg.updatedAt, updatedBy: cfg.updatedBy,
 });
+const view = async (cfg, state, key) => ({ ...viewBase(cfg, state, key), ...(await pmView(cfg, state)) });
 const validKey = (k) => /^\d{4}-\d{2}-H[12]$/.test(String(k || ""));
 
 export async function GET(request) {
@@ -59,10 +72,17 @@ export async function GET(request) {
     const stamp = nowISO();
     // Автонагадування: у його день, з 10:00 за Києвом, один раз на період.
     const autoKey = autoPeriodFor(now.date);
-    if (cfg.auto && autoKey && now.hour >= 10 && !cfg.autoSent[autoKey] && !cfg.jobs.some((j) => j.auto && j.periodKey === autoKey)) {
+    if (cfg.auto && autoKey && now.hour >= 10 && !cfg.autoSent[autoKey] && !cfg.jobs.some((j) => j.auto && !j.kind && j.periodKey === autoKey)) {
       cfg.jobs.push({ id: "rj_" + crypto.randomBytes(6).toString("hex"), auto: true, periodKey: autoKey, by: "автоматично", at: stamp, status: "queued",
         targets: buildTargets(cfg, state, autoKey, URL_APP) });
       cfg.autoSent[autoKey] = stamp;
+    }
+    // Сповіщення PM: у робочі дні з 10:00 за Києвом, раз на день, лише тим, у кого щось чекає.
+    const wd = new Date(now.date + "T00:00:00Z").getUTCDay();
+    if (cfg.pmAuto && wd !== 0 && wd !== 6 && now.hour >= 10 && !(cfg.pmSent || {})[now.date]) {
+      const targets = await pmTargets(cfg, state);
+      cfg.pmSent = { [now.date]: stamp };
+      if (targets.length) cfg.jobs.push({ id: "rj_" + crypto.randomBytes(6).toString("hex"), auto: true, kind: "pm", periodKey: periodOfDate(now.date), by: "автоматично (PM)", at: stamp, status: "queued", targets });
     }
     // Видаємо чергу; «забране», але не підтверджене за 50 хв, видаємо знову.
     const stale = Date.now() - 50 * 60 * 1000;
@@ -82,7 +102,7 @@ export async function GET(request) {
   const u = new URL(request.url);
   const today = periodOfDate(kyivNow().date);
   const key = validKey(u.searchParams.get("period")) ? u.searchParams.get("period") : today;
-  return NextResponse.json({ ...view(await load(), (await readState()) || {}, key), current: today, previous: shiftPeriod(today, -1) });
+  return NextResponse.json({ ...(await view(await load(), (await readState()) || {}, key)), current: today, previous: shiftPeriod(today, -1) });
 }
 
 async function ack(jobId, results) {
@@ -117,10 +137,11 @@ export async function PUT(request) {
     cfg.slack = next;
   }
   if (typeof body?.auto === "boolean") cfg.auto = body.auto;
+  if (typeof body?.pmAuto === "boolean") cfg.pmAuto = body.pmAuto;
   cfg.updatedAt = nowISO(); cfg.updatedBy = g.me.name;
   await writeKey(KEY, cfg);
   const key = validKey(body?.periodKey) ? body.periodKey : periodOfDate(kyivNow().date);
-  return NextResponse.json(view(cfg, (await readState()) || {}, key));
+  return NextResponse.json(await view(cfg, (await readState()) || {}, key));
 }
 
 export async function POST(request) {
@@ -132,9 +153,24 @@ export async function POST(request) {
   }
   const g = await admin(request);
   if (g.res) return g.res;
+  if (body?.kind === "pm") {
+    const cfgPm = await load();
+    if (cfgPm.jobs.some((j) => j.kind === "pm" && j.status !== "sent" && Date.now() - Date.parse(j.at) < 10 * 60 * 1000)) {
+      return NextResponse.json({ error: "Сповіщення PM уже в черзі." }, { status: 409 });
+    }
+    const st = (await readState()) || {};
+    const only = Array.isArray(body?.names) ? body.names.map(String) : null;
+    const targets = await pmTargets(cfgPm, st, only);
+    if (!targets.length) return NextResponse.json({ error: "Нікому надсилати: у вибраних PM нічого не чекає." }, { status: 400 });
+    cfgPm.jobs.push({ id: "rj_" + crypto.randomBytes(6).toString("hex"), auto: false, kind: "pm", periodKey: periodOfDate(kyivNow().date), by: g.me.name, at: nowISO(), status: "queued", targets });
+    cfgPm.jobs = cfgPm.jobs.slice(-60);
+    await writeKey(KEY, cfgPm);
+    const today = periodOfDate(kyivNow().date);
+    return NextResponse.json(await view(cfgPm, st, today));
+  }
   if (!validKey(body?.periodKey)) return NextResponse.json({ error: "Некоректний період." }, { status: 400 });
   const cfg = await load();
-  if (cfg.jobs.some((j) => j.status !== "sent" && j.periodKey === body.periodKey && !j.auto && Date.now() - Date.parse(j.at) < 10 * 60 * 1000)) {
+  if (cfg.jobs.some((j) => !j.kind && j.status !== "sent" && j.periodKey === body.periodKey && !j.auto && Date.now() - Date.parse(j.at) < 10 * 60 * 1000)) {
     return NextResponse.json({ error: "Надсилання за цей період уже в черзі." }, { status: 409 });
   }
   const names = Array.isArray(body?.names) ? body.names.map(String) : null;
@@ -143,5 +179,5 @@ export async function POST(request) {
   cfg.jobs.push({ id: "rj_" + crypto.randomBytes(6).toString("hex"), auto: false, periodKey: body.periodKey, by: g.me.name, at: nowISO(), status: "queued", targets });
   cfg.jobs = cfg.jobs.slice(-60);
   await writeKey(KEY, cfg);
-  return NextResponse.json(view(cfg, (await readState()) || {}, body.periodKey));
+  return NextResponse.json(await view(cfg, (await readState()) || {}, body.periodKey));
 }

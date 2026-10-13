@@ -22,6 +22,7 @@ export default function Reminders({ getToken, onToast }) {
   const [text, setText] = useState("");
   const [slack, setSlack] = useState({});
   const [pick, setPick] = useState({});
+  const [pmPick, setPmPick] = useState({});
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const dirty = useRef(false);
@@ -40,6 +41,20 @@ export default function Reminders({ getToken, onToast }) {
     setD((old) => ({ ...(old || {}), ...x }));
     if (!keepText) { setText(x.template); setSlack(x.slack || {}); dirty.current = false; }
     setPick(Object.fromEntries((x.targets || []).map((t) => [t.name, !!t.slackId])));
+    if (x.pmTargets) setPmPick(Object.fromEntries(x.pmTargets.map((t) => [t.name, !!t.slackId])));
+  }
+  async function togglePmAuto() {
+    try { adopt(await call("PUT", { pmAuto: !d.pmAuto, periodKey: d.periodKey }), true); } catch (e) { onToast(e.message); }
+  }
+  async function sendPm() {
+    const names = (d.pmTargets || []).filter((t) => pmPick[t.name] && t.slackId).map((t) => t.name);
+    if (!names.length) return onToast("Нікого не вибрано.");
+    if (dirty.current) return onToast("Спершу збережіть змінені Slack ID.");
+    if (!window.confirm("Надіслати сповіщення " + names.length + " PM?\n\n" + names.join("\n"))) return;
+    setBusy(true);
+    try { adopt(await call("POST", { kind: "pm", names }), true); onToast("Поставлено в чергу: сповіщення підуть у Slack протягом години."); }
+    catch (e) { onToast("Не надіслано: " + e.message); }
+    finally { setBusy(false); }
   }
   async function load(p) {
     try { setErr(""); adopt(await call("GET", null, p ? "?period=" + p : ""), dirty.current); }
@@ -127,6 +142,45 @@ export default function Reminders({ getToken, onToast }) {
       </section>
 
       <section style={{ ...card, padding: 20 }}>
+        <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <h3 style={{ margin: 0, fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>Сповіщення PM</h3>
+          <label style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center", fontSize: 13, cursor: "pointer" }}>
+            <input type="checkbox" checked={!!d.pmAuto} onChange={togglePmAuto} style={{ width: "auto" }} />
+            автоматично у будні о 10:00, якщо щось чекає
+          </label>
+        </div>
+        <p style={{ margin: "6px 0 10px", color: C.muted, fontSize: 12.5 }}>
+          PM отримує одне повідомлення зі списком: запити на його людей, переведення на погодження, факт годин (внести / підтвердити). Хто нічого не має робити — не отримує. Slack ID той самий, що вище: впишіть його й натисніть «Зберегти» нижче.
+        </p>
+        {(d.pmTargets || []).length ? (
+          <div style={{ overflowX: "auto" }}>
+            <table>
+              <thead><tr><th style={{ width: 44 }} /><th>PM</th><th>Запити</th><th>Погодження</th><th>Внести факт</th><th>Підтвердити</th><th style={{ width: 170 }}>Slack ID</th></tr></thead>
+              <tbody>
+                {d.pmTargets.map((t) => (
+                  <tr key={t.name}>
+                    <td><input type="checkbox" checked={!!pmPick[t.name]} disabled={!t.slackId} onChange={(e) => setPmPick((p) => ({ ...p, [t.name]: e.target.checked }))} style={{ width: "auto" }} aria-label={"Надіслати " + t.name} /></td>
+                    <td>{t.name}</td>
+                    <td className="num">{t.counts.requests || "—"}</td><td className="num">{t.counts.approvals || "—"}</td>
+                    <td className="num">{t.counts.facts || "—"}</td><td className="num">{t.counts.confirms || "—"}</td>
+                    <td><input type="text" value={slack[t.name] !== undefined ? slack[t.name] : t.slackId} placeholder="U0123ABCD" aria-label={"Slack ID " + t.name}
+                      onChange={(e) => { dirty.current = true; setSlack((s2) => ({ ...s2, [t.name]: e.target.value.trim() })); }} style={{ padding: "6px 8px" }} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : <p style={{ margin: 0, color: C.muted }}>Зараз ні в кого з PM нічого не чекає.</p>}
+        <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <button style={{ ...addBtn, opacity: (d.pmTargets || []).some((t) => pmPick[t.name]) ? 1 : 0.5 }} disabled={busy || !(d.pmTargets || []).some((t) => pmPick[t.name])} onClick={sendPm}>Надіслати вибраним PM</button>
+          <button className="ghost" disabled={busy} onClick={save}>Зберегти Slack ID</button>
+        </div>
+        {(d.pmTargets || [])[0] && (
+          <pre style={{ margin: "12px 0 0", whiteSpace: "pre-wrap", font: "inherit", fontSize: 13.5, background: "#F8FAFC", border: "1px solid " + C.lineSoft, borderRadius: 8, padding: "12px 14px" }}>{d.pmTargets[0].text}</pre>
+        )}
+      </section>
+
+      <section style={{ ...card, padding: 20 }}>
         <h3 style={{ margin: 0, fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>Текст повідомлення</h3>
         <p style={{ margin: "4px 0 10px", color: C.muted, fontSize: 12.5 }}>
           Підстановки: {VARS.map((v) => (
@@ -163,7 +217,7 @@ export default function Reminders({ getToken, onToast }) {
             <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: C.ink2 }}>
               {d.jobs.map((j) => (
                 <li key={j.id} style={{ marginBottom: 4 }}>
-                  {fmtDT(j.at)} · {j.auto ? "автоматично" : j.by} · {j.targets.length} {j.targets.length === 1 ? "людина" : "людей"} ·{" "}
+                  {fmtDT(j.at)} · {j.kind === "pm" ? "PM · " : ""}{j.auto ? "автоматично" : j.by} · {j.targets.length} {j.targets.length === 1 ? "людина" : "людей"} ·{" "}
                   {j.status === "sent"
                     ? <span style={{ color: (j.results || []).some((r) => !r.ok) ? C.warn : C.signal }}>
                         надіслано {fmtDT(j.sentAt)}{(j.results || []).filter((r) => !r.ok).length ? " (не вдалося: " + j.results.filter((r) => !r.ok).map((r) => r.name).join(", ") + ")" : ""}
