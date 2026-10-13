@@ -4191,6 +4191,8 @@ function UsersBook({ token, me }) {
   const [error, setError] = useState("");
   const [secret, setSecret] = useState(null);
   const [form, setForm] = useState({ username: "", displayName: "", password: "", role: "owner" });
+  const [bulk, setBulk] = useState(null); // текст «Ім'я Прізвище | логін»
+  const [bulkOut, setBulkOut] = useState(null);
 
   const card = { background: C.surface, border: "1px solid " + C.line, borderRadius: 10, boxShadow: "0 1px 2px rgba(15,23,42,.04)" };
   const label = { fontSize: 12, fontWeight: 600, color: C.muted, marginBottom: 6, display: "block" };
@@ -4234,6 +4236,27 @@ function UsersBook({ token, me }) {
       setError(e.message);
     }
   }
+  // Транслітерація (КМУ 2010, спрощено) для логіну за замовчуванням: ім'я.прізвище.
+  const TR = { а: "a", б: "b", в: "v", г: "h", ґ: "g", д: "d", е: "e", є: "ie", ж: "zh", з: "z", и: "y", і: "i", ї: "i", й: "i", к: "k", л: "l", м: "m", н: "n", о: "o", п: "p", р: "r", с: "s", т: "t", у: "u", ф: "f", х: "kh", ц: "ts", ч: "ch", ш: "sh", щ: "shch", ь: "", ю: "iu", я: "ia", "'": "", "ʼ": "", "’": "" };
+  const translit = (t) => String(t).toLowerCase().split("").map((ch) => (ch in TR ? TR[ch] : ch)).join("").replace(/[^a-z0-9]+/g, ".").replace(/^\.+|\.+$/g, "");
+  async function createBulk() {
+    setError(""); setSecret(null); setBulkOut(null);
+    const lines = String(bulk || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const out = [];
+    for (const line of lines) {
+      const [nameRaw, loginRaw] = line.split("|").map((x) => x.trim());
+      const displayName = (nameRaw || "").replace(/\s+/g, " ");
+      const username = (loginRaw || translit(displayName.split(" ").join(" "))).toLowerCase();
+      try {
+        const d = await call("POST", { username, displayName, role: "pm" });
+        out.push({ displayName, username: d.user.username, password: d.password, ok: true });
+      } catch (e) {
+        out.push({ displayName, username, ok: false, error: e.message });
+      }
+    }
+    setBulkOut(out);
+    load();
+  }
   async function patch(username, body, confirmText) {
     if (confirmText && !window.confirm(confirmText)) return;
     setError("");
@@ -4274,6 +4297,31 @@ function UsersBook({ token, me }) {
           {error}
         </p>
       )}
+      <div style={{ margin: "14px 18px 0" }}>
+        <button className="ghost" onClick={() => { setBulk(bulk == null ? "" : null); setBulkOut(null); }}>Створити PM списком</button>
+        {bulk != null && (
+          <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+            <p style={{ margin: 0, color: C.muted, fontSize: 12.5 }}>
+              Кожен рядок: <b>Ім'я Прізвище | логін</b> (логін можна пропустити — буде ім'я.прізвище латиницею). Роль — PM, пароль створюється автоматично.
+              Ім'я має збігатися з тим, що стоїть у полі «PM, який погоджує».
+            </p>
+            <textarea value={bulk} onChange={(e) => setBulk(e.target.value)} rows={8} aria-label="Список PM"
+              style={{ width: "100%", boxSizing: "border-box", font: "inherit", padding: "10px 12px", border: "1px solid " + C.line, borderRadius: 8 }} />
+            <div><button style={addBtn} disabled={!String(bulk).trim()} onClick={createBulk}>Створити облікові записи</button></div>
+          </div>
+        )}
+        {bulkOut && (
+          <div role="status" style={{ marginTop: 12, background: C.warnSoft, border: "1px solid #FED7AA", borderRadius: 8, padding: "12px 14px" }}>
+            <div style={{ fontWeight: 600 }}>Створено {bulkOut.filter((r) => r.ok).length} з {bulkOut.length}</div>
+            <pre className="num" style={{ margin: "8px 0 0", whiteSpace: "pre-wrap", font: "inherit", userSelect: "all" }}>
+              {bulkOut.map((r) => (r.ok ? r.displayName + "\t" + r.username + "\t" + r.password : r.displayName + "\t— не створено: " + r.error)).join("\n")}
+            </pre>
+            <div style={{ color: C.warn, fontSize: 12.5, marginTop: 6 }}>
+              Скопіюйте таблицю й передайте логіни й паролі кожному особисто. Пізніше паролі не побачити — лише скинути.
+            </div>
+          </div>
+        )}
+      </div>
       {secret && (
         <div
           role="status"
