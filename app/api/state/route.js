@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { mergeState, nowISO } from "../../../lib/merge";
-import { readState, writeState, persistent } from "../../../lib/store";
+import { readState, writeState, persistent, readKey } from "../../../lib/store";
+import { LOANS_KEY } from "../../../lib/loans";
 import { whoIs } from "../../../lib/auth";
 import { sameName } from "../../../lib/users";
 import { cleanHours, hoursToAlloc } from "../../../lib/hours";
@@ -29,12 +30,13 @@ async function desk(request) {
 
 const ownTeams = (state, me) => new Set((state.teams || []).filter((t) => sameName(t.owner, me.name)).map((t) => t.id));
 
-function viewFor(state, me) {
+async function viewFor(state, me) {
   // _now — час сервера: клієнт вирівнює за ним свої позначки часу правок.
   const full = { ...EMPTY, ...state, _persistent: persistent, _view: me.role, _now: nowISO() };
-  if (me.role === "admin") return full;
+  // _loans — години позичання між проєктами (окремий ключ, веде PM через /api/pm). Лише для розрахунку тегів.
+  if (me.role === "admin") return { ...full, _loans: (await readKey(LOANS_KEY)) || [] };
   // Бухгалтер бачить дані, потрібні для розрахунку тегів і відомостей, але не журнал дій інших.
-  if (me.role === "accountant") return { ...full, log: (state.log || []).filter((l) => sameName(l.who, me.name)) };
+  if (me.role === "accountant") return { ...full, _loans: (await readKey(LOANS_KEY)) || [], log: (state.log || []).filter((l) => sameName(l.who, me.name)) };
   const own = ownTeams(state, me);
   const ownPeople = new Set((state.employees || []).filter((e) => own.has(e.teamId)).map((e) => e.id));
   return {
@@ -173,7 +175,7 @@ export async function GET(request) {
   const g = await desk(request);
   if (g.res) return g.res;
   const stored = (await readState()) || EMPTY;
-  return NextResponse.json(viewFor(stored, g.me));
+  return NextResponse.json(await viewFor(stored, g.me));
 }
 
 export async function PUT(request) {
@@ -197,5 +199,5 @@ export async function PUT(request) {
   merged.updatedAt = nowISO();
   merged.updatedBy = g.me.name;
   await writeState(merged);
-  return NextResponse.json(viewFor(merged, g.me));
+  return NextResponse.json(await viewFor(merged, g.me));
 }

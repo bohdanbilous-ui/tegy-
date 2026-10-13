@@ -6,9 +6,12 @@ import { hoursToAlloc, hoursTotal, hoursText, hasHours, MAX_HOURS } from "../lib
 import { api } from "../lib/api";
 import { workingOn } from "../lib/people";
 import { orderProjects, isInactive } from "../lib/projects";
+import { applyLoans, confirmedIndex, normHours, loanText } from "../lib/loans";
 import TeamDesk from "./TeamDesk";
 import Reminders from "./Reminders";
 import PayDesk from "./PayDesk";
+import PfChanges from "./PfChanges";
+import PmDesk, { LoansAdmin } from "./PmDesk";
 
 /* Вхід через Google: NEXT_PUBLIC_GOOGLE_CLIENT_ID і NEXT_PUBLIC_ALLOWED_DOMAIN.
    Токен перевіряється на сервері (app/api/state/route.js). */
@@ -23,7 +26,7 @@ const learnClock = (serverNow, sentAt) => { const t = Date.parse(serverNow || ""
 /* Ролі: admin — усе; hrd — переведення + табель своїх команд; owner — лише табель. */
 const roleOf = (u) => (!u ? "" : u.role || (u.isAdmin ? "admin" : "owner"));
 const deskUser = (u) => roleOf(u) === "admin" || roleOf(u) === "hrd" || roleOf(u) === "accountant";
-const ROLE_LABEL = { admin: "адміністратор", hrd: "HRD", accountant: "бухгалтер", owner: "відповідальний" };
+const ROLE_LABEL = { admin: "адміністратор", hrd: "HRD", accountant: "бухгалтер", pm: "PM", owner: "відповідальний" };
 const ALLOWED_DOMAIN = process.env.NEXT_PUBLIC_ALLOWED_DOMAIN || "";
 
 const C = {
@@ -428,7 +431,7 @@ export default function TransferDesk() {
   // Остання відкрита вкладка кожного розділу — щоб повертатися туди, де був.
   const lastTab = useRef({});
   useEffect(() => {
-    const sec = { form: "moves", journal: "moves", approve: "moves", req: "moves", teams: "sheet", remind: "sheet", fin: "sheet", report: "sheet", snap: "snap", lists: "lists", pay: "pay" }[tab];
+    const sec = { form: "moves", journal: "moves", approve: "moves", req: "moves", loans: "moves", teams: "sheet", remind: "sheet", fin: "sheet", report: "sheet", snap: "snap", lists: "lists", pay: "pay" }[tab];
     if (sec) lastTab.current[sec] = tab;
   }, [tab]);
   const [user, setUser] = useState(null);
@@ -450,6 +453,8 @@ export default function TransferDesk() {
   const [fin, setFin] = useState([]);
   // Довідник FPV — окремі люди поза PeopleForce, що входять у відомості ЗП (лише адміністратор).
   const [fpv, setFpv] = useState([]);
+  // Позичання годин між проєктами (окремий ключ на сервері, лише читання тут; підтверджені змінюють теги).
+  const [loans, setLoans] = useState([]);
   const [finMonth, setFinMonth] = useState(() => { const d = todayISO(); return { y: +d.slice(0, 4), m: +d.slice(5, 7) }; });
   const [finTeam, setFinTeam] = useState("all");
   const [finQuery, setFinQuery] = useState("");
@@ -555,6 +560,7 @@ export default function TransferDesk() {
     setFin(d.fin || []);
     setFpv(d.fpv || []);
     setSettings({ approvalMode: "give", ...(d.settings || {}) });
+    if (Array.isArray(d._loans)) setLoans(d._loans);
   }
 
   useEffect(() => {
@@ -641,7 +647,7 @@ export default function TransferDesk() {
   // Заявки з Google Форми: при вході, щохвилини й при відкритті вкладки.
   useEffect(() => {
     if (!ready || roleOf(user) !== "admin") return;
-    loadRequests();
+    loadRequests(); loadPf();
     const id = setInterval(() => { if (!document.hidden) loadRequests(); }, 60000);
     return () => clearInterval(id);
   }, [ready, user]);
@@ -838,11 +844,32 @@ export default function TransferDesk() {
     try { const d = await callRequests("GET"); setRequests(d.requests || []); setFormReady(d.formReady !== false); }
     catch (e) { /* заявки не критичні — спробуємо наступного разу */ }
   }
-  async function callPf(method) {
-    const res = await fetch("/api/peopleforce", { method, headers: { Authorization: "Bearer " + tokenRef.current }, cache: "no-store" });
+  async function callPf(method, body) {
+    const res = await fetch("/api/peopleforce", { method, cache: "no-store",
+      headers: { Authorization: "Bearer " + tokenRef.current, ...(body ? { "Content-Type": "application/json" } : {}) },
+      body: body ? JSON.stringify(body) : undefined });
     const data = await res.json().catch(() => ({}));
     if (!res.ok && !data.last) throw new Error(data.error || "HTTP " + res.status);
     return data;
+  }
+  // Підтягнути стан після змін, які зробив сервер, не загубивши ще не надіслані правки.
+  async function pullServer() {
+    const sentAt = Date.now();
+    const remote = await api.get({ token: tokenRef.current, name: user.name });
+    learnClock(remote._now, sentAt);
+    applyState(mergeState(stateRef.current, remote));
+    if (Array.isArray(remote._loans)) setLoans(remote._loans);
+  }
+  async function decidePf(action, body) {
+    try {
+      const d = await callPf("POST", { action, ...body });
+      setPf((p) => ({ ...(p || {}), changes: d.changes || [], buMap: d.buMap || {} }));
+      if (action === "confirm") {
+        await pullServer();
+        const it = d.item || {};
+        setToast(it.name + ": підтверджено" + (it.transferId ? " · переведення з " + fmt(it.effectiveDate) + " · тег " + (it.tagBefore || "—") + " → " + (it.tagAfter || "—") : ""));
+      } else setToast(action === "dismiss" ? "Зміну відхилено." : "Зміну повернуто в роботу.");
+    } catch (e) { setToast("PeopleForce: " + e.message); }
   }
   async function loadPf() {
     if (!user || roleOf(user) !== "admin") return;
@@ -858,7 +885,8 @@ export default function TransferDesk() {
         const remote = await api.get({ token: tokenRef.current, name: user.name });
         learnClock(remote._now, sentAt);
         adoptServer(remote);
-        setToast("PeopleForce: нових " + d.last.counts.added + ", оновлено " + d.last.counts.updated + ", звільнено " + d.last.counts.left + ".");
+        setToast("PeopleForce: нових " + d.last.counts.added + ", оновлено " + d.last.counts.updated + ", звільнено " + d.last.counts.left +
+          (d.last.counts.changes ? ", змін посади / БЮ " + d.last.counts.changes + " — чекають на підтвердження" : "") + ".");
       } else setToast("PeopleForce: " + ((d.last && d.last.error) || "не вдалося"));
     } catch (e) { setToast("PeopleForce: " + e.message); }
     finally { setPfBusy(false); }
@@ -969,6 +997,16 @@ export default function TransferDesk() {
   const entryId = (empId, key) => "en_" + key + "_" + empId;
   const entryOf = (empId, key) => entries.find((x) => x.id === entryId(empId, key));
   const allocIn = (empId, key) => (entryOf(empId, key) || {}).alloc || [];
+  /* Підтверджені години позичання за половину місяця: частка проєкту-позичальника =
+     години ÷ усі години людини за період (з табеля в годинах, інакше норма), решта — пропорційно. */
+  const loanIdx = useMemo(() => confirmedIndex(loans), [loans]);
+  const loanAdj = (empId, key, alloc) => {
+    const list = loanIdx.get(empId + "|" + key);
+    if (!list || !list.length) return { alloc, applied: false, text: "" };
+    const x = entryOf(empId, key);
+    const r = applyLoans(alloc, list, hasHours(x) ? hoursTotal(x.hours) : normHours(key));
+    return { alloc: r.applied ? r.alloc : alloc, applied: r.applied, text: loanText(list) };
+  };
   const personAlloc = (e) => allocIn(e.id, pKey);
   const isSubmitted = (t, key) => !!((t.submitted || {})[key || pKey]);
 
@@ -1261,10 +1299,12 @@ export default function TransferDesk() {
       const moves = movesIn(e, tr, mStart, mEnd);
       const b1 = blendAlloc(e, tr, mStart, mMid), b2 = blendAlloc(e, tr, mMid2, mEnd);
       const byMoves = blendAlloc(e, tr, mStart, mEnd);
-      const a1 = sheet ? asAlloc(allocIn(e.id, finK1)).filter((r) => r.percent > 0) : b1;
-      const a2 = sheet ? asAlloc(allocIn(e.id, finK2)).filter((r) => r.percent > 0) : b2;
+      const L1 = loanAdj(e.id, finK1, sheet ? asAlloc(allocIn(e.id, finK1)).filter((r) => r.percent > 0) : b1);
+      const L2 = loanAdj(e.id, finK2, sheet ? asAlloc(allocIn(e.id, finK2)).filter((r) => r.percent > 0) : b2);
+      const a1 = L1.alloc, a2 = L2.alloc, loaned = L1.applied || L2.applied;
+      const loan = [L1.applied && "01–15: " + L1.text, L2.applied && "16–" + finDays + ": " + L2.text].filter(Boolean).join("; ");
       const fromRep = repRows.get(e.id) || null;
-      const calc = fromRep || (sheet ? mergeHalves(a1, a2, finDays) : byMoves);
+      const calc = fromRep || (sheet || loaned ? mergeHalves(a1, a2, finDays) : byMoves);
       const ov = fin.find((x) => x.id === "fo_" + finKey + "_" + e.id);
       const manual = !!(ov && ov.alloc);
       const alloc = manual ? asAlloc(ov.alloc).filter((r) => r.percent > 0) : calc;
@@ -1273,18 +1313,20 @@ export default function TransferDesk() {
         t1: tagOf(a1, codes), t2: tagOf(a2, codes), calc, calcTag: tagOf(calc, codes),
         alloc, tag: tagOf(alloc, codes), total: num2(alloc.reduce((s, r) => s + r.percent, 0)),
         manual, note: (ov && ov.note) || "", by: manual ? ov.updatedBy || "" : "", at: manual ? ov.updatedAt || "" : "",
-        miss: fromRep ? "зі звіту годин" : !sheet ? (moves.length ? "без табеля · за переведеннями" : "без табеля · за довідником")
+        miss: [fromRep ? "зі звіту годин" : !sheet ? (moves.length ? "без табеля · за переведеннями" : "без табеля · за довідником")
           : !a1.length && !a2.length ? "немає даних" : !a1.length ? "бракує 01–15" : !a2.length ? "бракує 16–" + finDays : "",
+          loan && !fromRep ? "позичання " + loan : ""].filter(Boolean).join(" · "),
+        loan: fromRep ? "" : loan,
         source: fromRep ? "звіт" : sheet ? "табель" : moves.length ? "переведення" : "довідник",
         // У табелі інші цифри, ніж дають переведення цього місяця, — підкажемо, який тег очікується.
-        expect: sheet && moves.length && allocSig(calc) !== allocSig(byMoves) ? tagOf(byMoves, codes) : "",
+        expect: sheet && !loaned && moves.length && allocSig(calc) !== allocSig(byMoves) ? tagOf(byMoves, codes) : "",
         moves: moves.map((t) => t.effectiveDate > mStart && t.effectiveDate <= mEnd ? t.effectiveDate : t.returnDate),
       };
-    }).filter((r) => r.source === "табель" || r.source === "звіт" || r.moves.length).sort(byTeamName);
+    }).filter((r) => r.source === "табель" || r.source === "звіт" || r.moves.length || r.loan).sort(byTeamName);
     const pending = teams.filter((t) => employees.some((e) => e.teamId === t.id && workingOn(e, finK1.slice(0, 7) + "-01")))
       .map((t) => ({ name: t.name, h1: !!(t.submitted || {})[finK1], h2: !!(t.submitted || {})[finK2] }));
     return { rows, pending };
-  }, [employees, entries, teams, fin, codes, finKey, transfers]);
+  }, [employees, entries, teams, fin, codes, finKey, transfers, loanIdx]);
 
   // Закритий місяць показуємо зі збереженого знімка: цифри й теги не рухаються.
   const finRows = useMemo(() => {
@@ -1385,18 +1427,34 @@ export default function TransferDesk() {
         const list = dayList(s.from, s.to).filter((d) => (!e.hiredOn || d >= e.hiredOn) && (!e.leftOn || d <= e.leftOn));
         if (!list.length) return;
         const k1 = periodKey(s.y, s.m, 1), k2 = periodKey(s.y, s.m, 2);
-        const a1 = live(allocIn(e.id, k1)), a2 = live(allocIn(e.id, k2));
-        const sheet = inTeam(e) || a1.length > 0 || a2.length > 0;
+        const r1 = live(allocIn(e.id, k1)), r2 = live(allocIn(e.id, k2));
+        const sheet = inTeam(e) || r1.length > 0 || r2.length > 0;
+        // Підтверджені позичання змінюють розподіл половини місяця.
+        const L1 = loanAdj(e.id, k1, r1), L2 = loanAdj(e.id, k2, r2);
+        const a1 = L1.alloc, a2 = L2.alloc;
+        const hasLoan = loanIdx.has(e.id + "|" + k1) || loanIdx.has(e.id + "|" + k2);
+        const sheetLoanNote = (which) => { const t = which.filter((L) => L.applied).map((L) => L.text).join(", "); if (t) notes.add("позичання за " + finLabel(s).toLowerCase() + ": " + t); };
+        // Для людей без табеля: розподіл за довідником + підтверджені позичання (це вже дані обліку).
+        let loanUsed = false;
+        const dirHalf = (d, alloc) => {
+          if (!hasLoan) return alloc;
+          const L = loanAdj(e.id, +d.slice(8, 10) <= 15 ? k1 : k2, alloc);
+          if (L.applied) { loanUsed = true; notes.add("позичання за " + finLabel(s).toLowerCase() + ": " + L.text); }
+          return L.alloc;
+        };
         const rep = repOf(s.mk, e.id);
         if (s.full) {
           // Повний місяць — рівно те, що показує фін. облік за цей місяць.
           const close = fin.find((x) => x.id === "fc_" + s.mk);
           const snap = close && close.closed && (close.rows || []).find((x) => x.e === e.id);
           const ov = fin.find((x) => x.id === "fo_" + s.mk + "_" + e.id);
-          const isData = !!(snap || (ov && ov.alloc) || rep || sheet);
           const alloc = snap ? live((snap.a || []).map(([project, percent]) => ({ project, percent })))
             : ov && ov.alloc ? live(ov.alloc)
-            : rep || (sheet ? mergeHalves(a1, a2, lastDay(s.y, s.m)) : blendAlloc(e, tr, s.from, s.to));
+            : rep || (sheet ? mergeHalves(a1, a2, lastDay(s.y, s.m))
+              : hasLoan ? mergeHalves(dirHalf(s.mk + "-01", blendAlloc(e, tr, s.mk + "-01", s.mk + "-15")), dirHalf(s.mk + "-16", blendAlloc(e, tr, s.mk + "-16", s.to)), lastDay(s.y, s.m))
+              : blendAlloc(e, tr, s.from, s.to));
+          const isData = !!(snap || (ov && ov.alloc) || rep || sheet || loanUsed);
+          if (!snap && !(ov && ov.alloc) && !rep && sheet) sheetLoanNote([L1, L2]);
           if (alloc.length) add(alloc, list.length, isData); else notes.add("немає даних за " + finLabel(s).toLowerCase());
           if (snap) notes.add(finLabel(s).toLowerCase() + " — із закритого місяця");
           else if (ov && ov.alloc) notes.add(finLabel(s).toLowerCase() + " — з коригуванням");
@@ -1404,10 +1462,10 @@ export default function TransferDesk() {
         }
         if (rep) { add(rep, list.length, true); notes.add("звіт годин за " + finLabel(s).toLowerCase() + " місячний — узято його"); return; }
         list.forEach((d) => {
-          if (!sheet) return add(live(allocAt(e, tr, d)), 1, false);
+          if (!sheet) { loanUsed = false; const a = dirHalf(d, live(allocAt(e, tr, d))); return add(a, 1, loanUsed); }
           const half = +d.slice(8, 10) <= 15 ? 1 : 2;
           const own = half === 1 ? a1 : a2, other = half === 1 ? a2 : a1;
-          if (own.length) return add(own, 1, true);
+          if (own.length) { sheetLoanNote([half === 1 ? L1 : L2]); return add(own, 1, true); }
           if (other.length) { notes.add((half === 1 ? "01–15" : "16–" + lastDay(s.y, s.m)) + " не заповнено — взято іншу половину"); return add(other, 1, true); }
           notes.add("немає даних за частину днів");
         });
@@ -1429,9 +1487,9 @@ export default function TransferDesk() {
       out.set(row.id, { alloc: x.alloc, tag: tagOf(x.alloc, codes), note: x.notes.join("; ") });
     });
     return out;
-  }, [tagOn, tagSpanBad, tagSpan.from, tagSpan.to, finRows, employees, entries, teams, fin, transfers, codes]);
+  }, [tagOn, tagSpanBad, tagSpan.from, tagSpan.to, finRows, employees, entries, teams, fin, transfers, codes, loanIdx]);
   // Для відомостей ЗП: той самий розрахунок за проміжок і перетворення на коди.
-  const paySpanCalc = useCallback((from, to) => spanCalculator(from, to), [teams, fin, entries, transfers]);
+  const paySpanCalc = useCallback((from, to) => spanCalculator(from, to), [teams, fin, entries, transfers, loanIdx]);
   const payParts = useCallback((alloc) => tagParts(alloc, codes), [codes]);
   // Рядок для вивантаження: за місяць — як є, за проміжок — із перерахованим розподілом.
   const tagRow = (r) => {
@@ -2112,6 +2170,9 @@ export default function TransferDesk() {
     }
   }
 
+  if (role === "pm") {
+    return <PmDesk user={user} token={tokenRef.current} onSignOut={signOut} onApiError={onApiError} />;
+  }
   if (!isAdmin && !isHrd && !isAcc) {
     return (
       <TeamDesk
@@ -2128,20 +2189,23 @@ export default function TransferDesk() {
       <style>{css}</style>
       {(() => {
         /* Навігація: розділи — у бічному меню, вкладки розділу — над сторінкою. */
-        const allowed = (k) => isAcc ? k === "pay" || k === "lists" : isAdmin || !["approve", "lists", "fin", "req", "remind", "pay"].includes(k);
+        const allowed = (k) => isAcc ? k === "pay" || k === "lists" : isAdmin || !["approve", "lists", "fin", "req", "remind", "pay", "loans"].includes(k);
+        const loansPending = loans.filter((l) => l.status === "pending").length;
         const TABS = {
           form: "Нове переведення", journal: "Журнал",
           approve: "Погодження" + (myPending.length ? " · " + myPending.length : ""),
           req: "Заявки" + (newRequests.length ? " · " + newRequests.length : ""),
+          loans: "Позичання годин" + (loansPending ? " · " + loansPending : ""),
           teams: "Табель команд", remind: "Нагадування", fin: "Місяць · фін. облік", report: "Звіт по місяцях",
           snap: "Зріз на дату", lists: "Довідник", pay: "Відомості ЗП",
         };
+        const pfOpen = ((pf && pf.changes) || []).filter((x) => x.status === "new").length;
         const SECTIONS = [
-          { k: "moves", label: "Переведення", icon: "moves", tabs: ["form", "journal", "approve", "req"], badge: (isAdmin ? myPending.length + newRequests.length : 0) },
+          { k: "moves", label: "Переведення", icon: "moves", tabs: ["form", "journal", "approve", "req", "loans"], badge: (isAdmin ? myPending.length + newRequests.length + loansPending : 0) },
           { k: "sheet", label: "Табель", icon: "sheet", tabs: ["teams", "remind", "fin", "report"] },
           { k: "pay", label: "Відомості ЗП", icon: "pay", tabs: ["pay"] },
           { k: "snap", label: "Зріз на дату", icon: "snap", tabs: ["snap"] },
-          { k: "lists", label: "Довідник", icon: "lists", tabs: ["lists"] },
+          { k: "lists", label: "Довідник", icon: "lists", tabs: ["lists"], badge: isAdmin ? pfOpen : 0 },
         ].map((x) => ({ ...x, tabs: x.tabs.filter(allowed) })).filter((x) => x.tabs.length);
         const cur = SECTIONS.find((x) => x.tabs.includes(tab)) || SECTIONS[0];
         const initials = (user.name || "?").split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
@@ -2545,6 +2609,10 @@ export default function TransferDesk() {
         )}
 
         {/* ── ПОГОДЖЕННЯ ── */}
+        {tab === "loans" && isAdmin && (
+          <LoansAdmin token={tokenRef.current} onChanged={() => pullServer().catch(() => {})} setToast={setToast} />
+        )}
+
         {tab === "approve" && isAdmin && (() => {
           const mode = settings.approvalMode;
           const card2 = (t, onlyMine) => {
@@ -3458,8 +3526,8 @@ export default function TransferDesk() {
                       <div style={{ flex: "1 1 320px" }}>
                         <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>PeopleForce</h2>
                         <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>
-                          Щоночі (близько 03:00 за Києвом) лише читає PeopleForce: додає нових людей і оновлює статус «працює / звільнений». Ім'я, посаду, команди, розподіл і переведення наявних людей не змінює.
-                          Звільнені зникають зі списків, але їхня історія лишається.
+                          Щоночі (близько 03:00 за Києвом) лише читає PeopleForce: додає нових людей і оновлює статус «працює / звільнений». Ім'я, посаду, команди, розподіл і переведення наявних людей сама не змінює.
+                          Якщо в PeopleForce змінилась посада чи БЮ — зміна з'являється нижче й чекає на ваше підтвердження. Звільнені зникають зі списків, але їхня історія лишається.
                         </p>
                       </div>
                       {pf && pf.configured && (
@@ -3480,9 +3548,10 @@ export default function TransferDesk() {
                           <>
                             <p style={{ margin: 0, color: C.ink2 }}>
                               Востаннє: {fmtDT(pf.last.at)} ({pf.last.by}) — у PeopleForce {pf.last.total}; нових {pf.last.counts.added}, оновлено {pf.last.counts.updated}, звільнено {pf.last.counts.left}
-                              {pf.last.counts.returned ? ", повернулися " + pf.last.counts.returned : ""}.
+                              {pf.last.counts.returned ? ", повернулися " + pf.last.counts.returned : ""}
+                              {pf.last.counts.changes ? ", змін посади / БЮ " + pf.last.counts.changes : ""}.
                             </p>
-                            {[["Нові", pf.last.added], ["Звільнення", pf.last.left], ["Повернулися", pf.last.returned], ["Зміни", pf.last.updated]].filter(([, a]) => a && a.length).map(([l, a]) => (
+                            {[["Нові", pf.last.added], ["Звільнення", pf.last.left], ["Повернулися", pf.last.returned], ["Зміни", pf.last.updated], ["Посада / БЮ", pf.last.changes]].filter(([, a]) => a && a.length).map(([l, a]) => (
                               <details key={l} style={{ marginTop: 6 }}>
                                 <summary style={{ cursor: "pointer", color: C.ink2 }}>{l}: {a.length}</summary>
                                 <ul style={{ margin: "6px 0 0", paddingLeft: 18, color: C.muted }}>{a.map((x, i) => <li key={i}>{x}</li>)}</ul>
@@ -3495,6 +3564,10 @@ export default function TransferDesk() {
                       </div>
                     )}
                   </section>
+                )}
+                {pf && (pf.changes || []).length > 0 && (
+                  <PfChanges changes={pf.changes} buMap={pf.buMap || {}} employees={employees} transfers={transfers} teams={teams}
+                    projects={allProjects.filter((x) => !offProject(x))} codes={codes} onDecide={decidePf} />
                 )}
                 <section
                   onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
@@ -4212,13 +4285,15 @@ function UsersBook({ token, me }) {
                         const r = e.target.value;
                         patch(u.username, { role: r }, "Змінити роль «" + u.displayName + "» на «" + ROLE_LABEL[r] + "»?" +
                           (r === "admin" ? " Адміністратор бачить і править усе." : r === "hrd" ? " HRD проводитиме переведення й вестиме табель своєї команди."
-                            : r === "accountant" ? " Бухгалтер бачитиме лише відомості ЗП з ІПН і вестиме їх: розподіл, юрособи, Штат/Гіг, довідник FPV." : ""));
+                            : r === "accountant" ? " Бухгалтер бачитиме лише відомості ЗП з ІПН і вестиме їх: розподіл, юрособи, Штат/Гіг, довідник FPV."
+                            : r === "pm" ? " PM погоджуватиме переведення своїх проєктів, вноситиме години позичених людей і підтверджуватиме години своїх. Його ім'я має стояти в полі «PM, який погоджує» проєкту." : ""));
                       }}
                       style={{ padding: "6px 8px", minWidth: 170 }}
                     >
                       <option value="owner">відповідальний</option>
                       <option value="hrd">HRD</option>
                       <option value="accountant">бухгалтер</option>
+                      <option value="pm">PM</option>
                       <option value="admin">адміністратор</option>
                     </select>
                   </td>
@@ -4292,6 +4367,7 @@ function UsersBook({ token, me }) {
               <option value="owner">відповідальний</option>
               <option value="hrd">HRD</option>
                       <option value="accountant">бухгалтер</option>
+              <option value="pm">PM</option>
               <option value="admin">адміністратор</option>
             </select>
             <button style={{ ...addBtn, width: "100%" }} onClick={create}>
