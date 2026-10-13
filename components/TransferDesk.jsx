@@ -7,7 +7,7 @@ import { api } from "../lib/api";
 import { workingOn } from "../lib/people";
 import { orderProjects, isInactive } from "../lib/projects";
 import { applyLoans, confirmedIndex, normHours, loanText, loanFits } from "../lib/loans";
-import { pmList, isPm, pmNormalize, pmText } from "../lib/pms";
+import { pmList, isPm, pmNormalize, pmText, parsePmLines } from "../lib/pms";
 import { donorState, carryApprovals } from "../lib/alloc";
 import TeamDesk from "./TeamDesk";
 import Reminders from "./Reminders";
@@ -1849,6 +1849,14 @@ export default function TransferDesk() {
     if (cardId === id) setCardId(null);
     setListNote(n ? "Співробітника прибрано зі списку. " + n + " записів лишились у журналі." : "Співробітника прибрано зі списку.");
     pushLog("прибрав співробітника", e?.name || id);
+  }
+  const [pmImport, setPmImport] = useState(null);
+  const pmParsed = useMemo(() => (pmImport == null ? null : parsePmLines(pmImport, activeProjects.concat(allProjects.filter((p) => !activeProjects.includes(p))))), [pmImport, allProjects, activeProjects]);
+  function applyPmImport() {
+    if (!pmParsed || !pmParsed.rows.length) return;
+    pmParsed.rows.forEach((r) => setPM(r.project, r.pm));
+    setToast("PM призначено на " + pmParsed.rows.length + " проєктах.");
+    setPmImport(null);
   }
   const renameIn = (a, oldName, name) => asAlloc(a).map((x) => (x.project === oldName ? { ...x, project: name } : x));
   function setPM(project, raw) {
@@ -3783,7 +3791,22 @@ export default function TransferDesk() {
                   <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
                     <button className="ghost" onClick={suggestCodes}>Підказати коди за назвами</button>
                     <span style={{ color: C.muted, fontSize: 12.5 }}>Доступні: {CODES.join(", ")}</span>
+                    <button className="ghost" onClick={() => setPmImport(pmImport == null ? "" : null)}>Вставити список PM</button>
                   </div>
+                  {pmImport != null && (
+                    <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
+                      <textarea value={pmImport} onChange={(e) => setPmImport(e.target.value)} rows={7} aria-label="Список PM"
+                        placeholder={"Проєкт - PM; ще один PM\nПроєкт1; Проєкт2 - PM"}
+                        style={{ width: "100%", boxSizing: "border-box", font: "inherit", padding: "10px 12px", border: "1px solid " + C.line, borderRadius: 8 }} />
+                      {pmParsed && (pmParsed.rows.length > 0 || pmParsed.unknown.length > 0) && (
+                        <div style={{ fontSize: 12.5, color: C.ink2 }}>
+                          {pmParsed.rows.map((r) => <div key={r.project}><b>{r.project}</b> → {pmText(r.pm)}</div>)}
+                          {pmParsed.unknown.length > 0 && <div style={{ color: C.warn, marginTop: 4 }}>Не знайдено в довіднику проєктів: {pmParsed.unknown.join("; ")}</div>}
+                        </div>
+                      )}
+                      <div><button className="ghost" disabled={!pmParsed || !pmParsed.rows.length} onClick={applyPmImport}>Призначити</button></div>
+                    </div>
+                  )}
                 </div>
                 {allProjects.length === 0 ? (
                   <p style={{ padding: "36px 20px", margin: 0, color: C.muted, textAlign: "center" }}>Проєктів ще немає. Додайте перший унизу або залийте список співробітників — проєкти підтягнуться з файлу.</p>
