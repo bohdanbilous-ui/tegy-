@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
 import { hoursToAlloc, hoursTotal, hoursText, hasHours, MAX_HOURS } from "../lib/hours";
-import { workingOn } from "../lib/people";
+import { workingOn, inTeamOn, wasInTeam } from "../lib/people";
 
 /* Робоче місце відповідального за відсотки: лише свої команди.
 Дані приходять з /api/team — сервер не віддає сюди ні чужих команд,
@@ -137,8 +137,11 @@ export default function TeamDesk({ user, token, onSignOut }) {
         if (!ver) return;
         const m = (dataRef.current?.members || []).find((y) => y.id === x.employeeId);
         if (!m) return;
-        const k = m.teamId + "|" + x.periodKey;
-        const g = groups[k] || (groups[k] = { tid: m.teamId, key: x.periodKey, rows: [], sent: {} });
+        // Звільнену людину, яку вже прибрали з команди, зберігаємо в тій команді, де вона була.
+        const ownIds = new Set((dataRef.current?.teams || []).map((t) => t.id));
+        const tid = ownIds.has(m.teamId) ? m.teamId : ((m.teamHist || []).map((h) => h.teamId).reverse().find((id) => ownIds.has(id)) || m.teamId);
+        const k = tid + "|" + x.periodKey;
+        const g = groups[k] || (groups[k] = { tid, key: x.periodKey, rows: [], sent: {} });
         g.rows.push({ employeeId: x.employeeId, alloc: x.alloc.map((r) => ({ ...r })), ...(hasHours(x) ? { hours: x.hours.map((h) => ({ ...h })) } : {}) });
         g.sent[x.id] = ver;
       });
@@ -168,10 +171,10 @@ export default function TeamDesk({ user, token, onSignOut }) {
   }, [dirty]);
 
   const team = (data?.teams || []).find((t) => t.id === teamId);
-  const teamAll = (data?.members || []).filter((m) => m.teamId === teamId);
+  const teamAll = (data?.members || []).filter((m) => wasInTeam(m, teamId));
   // Звільнених до початку періоду в табелі вже немає; в історії — лишаються.
   const pStart = period.y + "-" + pad(period.m) + "-" + (period.half === 1 ? "01" : "16");
-  const members = teamAll.filter((m) => workingOn(m, pStart));
+  const members = teamAll.filter((m) => inTeamOn(m, teamId, pStart));
   const codes = data?.codes || {};
   const sub = team ? (team.submitted || {})[pKey] : null;
   const locked = !!sub;

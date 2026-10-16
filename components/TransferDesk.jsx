@@ -4,7 +4,7 @@ import * as XLSX from "xlsx";
 import { mergeState, uniq } from "../lib/merge";
 import { hoursToAlloc, hoursTotal, hoursText, hasHours, MAX_HOURS } from "../lib/hours";
 import { api } from "../lib/api";
-import { workingOn } from "../lib/people";
+import { workingOn, inTeamOn, lastTeamId } from "../lib/people";
 import { orderProjects, isInactive } from "../lib/projects";
 import { applyLoans, confirmedIndex, normHours, loanText, loanFits } from "../lib/loans";
 import { pmList, isPm, pmNormalize, pmText, parsePmLines } from "../lib/pms";
@@ -998,7 +998,7 @@ export default function TransferDesk() {
   }
 
   // У табелі періоду — лише ті, хто ще працював на його початок.
-  const teamMembers = (id) => employees.filter((e) => e.teamId === id && workingOn(e, periodStart(period)));
+  const teamMembers = (id) => employees.filter((e) => inTeamOn(e, id, periodStart(period)));
   const pKey = periodKey(period.y, period.m, period.half);
   const entryId = (empId, key) => "en_" + key + "_" + empId;
   const entryOf = (empId, key) => entries.find((x) => x.id === entryId(empId, key));
@@ -1117,8 +1117,11 @@ export default function TransferDesk() {
   const canEditTeam = (t) => isAdmin || (t.owner || "").toLowerCase() === (user ? user.name.toLowerCase() : "—");
   const setEmp = (id, patch) => setEmployees((p) => p.map((e) => (e.id === id ? { ...e, ...patch, updatedAt: nowISO() } : e)));
   function joinTeam(empId, teamId) {
-    setEmp(empId, { teamId, teamAlloc: [] });
     const e = employees.find((x) => x.id === empId), t = teams.find((x) => x.id === teamId);
+    // Звільнену людину при виході з команди не «стираємо»: команда лишається в історії, щоб минулі періоди її бачили.
+    let teamHist = ((e && e.teamHist) || []).filter((h) => h.teamId !== teamId);
+    if (e && e.leftOn && e.teamId && e.teamId !== teamId) teamHist = [...teamHist.filter((h) => h.teamId !== e.teamId), { teamId: e.teamId, until: e.leftOn }];
+    setEmp(empId, { teamId, teamAlloc: [], teamHist });
     pushLog(teamId ? "додав до команди" : "прибрав з команди", (e ? e.name : empId) + (t ? " → " + t.name : ""));
   }
 
@@ -1271,7 +1274,7 @@ export default function TransferDesk() {
       rows: [["Період", "Співробітник", "Команда", "Тег", "Разом, %", "Годин", "Оновив"],
         ...entries.slice().sort((a, b) => b.periodKey.localeCompare(a.periodKey)).map((x) => {
           const e = employees.find((y) => y.id === x.employeeId) || {};
-          const t = teams.find((y) => y.id === e.teamId) || {};
+          const t = teams.find((y) => y.id === lastTeamId(e)) || {};
           return [x.periodKey, e.name || x.employeeId, t.name || "", tagOf(x.alloc, codes),
             (x.alloc || []).reduce((a2, r) => a2 + (Number(r.percent) || 0), 0), hasHours(x) ? hoursTotal(x.hours) : "", x.updatedBy || ""];
         })] },
@@ -1295,7 +1298,7 @@ export default function TransferDesk() {
   const finData = useMemo(() => {
     const filled = (id, k) => allocIn(id, k).some((r) => r.percent > 0);
     const mStart = finK1.slice(0, 7) + "-01", mMid = finK1.slice(0, 7) + "-15", mMid2 = finK1.slice(0, 7) + "-16", mEnd = lastDayISO(finMonth.y, finMonth.m);
-    const inTeam = (e) => !!(e.teamId && teams.some((t) => t.id === e.teamId));
+    const inTeam = (e) => !!(lastTeamId(e) && teams.some((t) => t.id === lastTeamId(e)));
     const working = (e) => workingOn(e, mStart) && (!e.hiredOn || e.hiredOn <= mEnd);
     // Завантажений звіт годин має перевагу над табелем, але поступається ручному коригуванню.
     const repRec = fin.find((x) => x.id === "fr_" + finKey);
@@ -1320,7 +1323,7 @@ export default function TransferDesk() {
       const manual = !!(ov && ov.alloc);
       const alloc = manual ? asAlloc(ov.alloc).filter((r) => r.percent > 0) : calc;
       return {
-        id: e.id, name: e.name, position: e.position || "", teamId: e.teamId || "", team: teamNameOf(e.teamId),
+        id: e.id, name: e.name, position: e.position || "", teamId: lastTeamId(e), team: teamNameOf(lastTeamId(e)),
         t1: tagOf(a1, codes), t2: tagOf(a2, codes), calc, calcTag: tagOf(calc, codes),
         alloc, tag: tagOf(alloc, codes), total: num2(alloc.reduce((s, r) => s + r.percent, 0)),
         manual, note: (ov && ov.note) || "", by: manual ? ov.updatedBy || "" : "", at: manual ? ov.updatedAt || "" : "",
@@ -1334,7 +1337,7 @@ export default function TransferDesk() {
         moves: moves.map((t) => t.effectiveDate > mStart && t.effectiveDate <= mEnd ? t.effectiveDate : t.returnDate),
       };
     }).filter((r) => r.source === "табель" || r.source === "звіт" || r.moves.length || r.loan).sort(byTeamName);
-    const pending = teams.filter((t) => employees.some((e) => e.teamId === t.id && workingOn(e, finK1.slice(0, 7) + "-01")))
+    const pending = teams.filter((t) => employees.some((e) => inTeamOn(e, t.id, finK1.slice(0, 7) + "-01")))
       .map((t) => ({ name: t.name, h1: !!(t.submitted || {})[finK1], h2: !!(t.submitted || {})[finK2] }));
     return { rows, pending };
   }, [employees, entries, teams, fin, codes, finKey, transfers, loanIdx]);
@@ -1346,7 +1349,7 @@ export default function TransferDesk() {
     return (finClose.rows || []).filter((s) => live.has(s.e)).map((s) => {
       const l = live.get(s.e), e = employees.find((x) => x.id === s.e);
       const alloc = (s.a || []).map(([project, percent]) => ({ project, percent: Number(percent) || 0 }));
-      const teamId = (e && e.teamId) || "";
+      const teamId = lastTeamId(e);
       return {
         t1: "", t2: "", calc: [], calcTag: "", miss: "", ...(l || {}),
         id: s.e, name: (e && e.name) || s.name || s.e, position: (e && e.position) || "", teamId, team: teamNameOf(teamId),
@@ -1409,7 +1412,7 @@ export default function TransferDesk() {
      kind: "облік" — дані табеля, звіту годин, коригування чи закритого місяця;
            "довідник" — лише розподіл за довідником і переведеннями; "змішано"; "немає". */
   function spanCalculator(from, to) {
-    const inTeam = (e) => !!(e.teamId && teams.some((t) => t.id === e.teamId));
+    const inTeam = (e) => !!(lastTeamId(e) && teams.some((t) => t.id === lastTeamId(e)));
     const live = (list) => asAlloc(list).filter((r) => r.percent > 0);
     const repOf = (mk, id) => {
       const rec = fin.find((x) => x.id === "fr_" + mk);

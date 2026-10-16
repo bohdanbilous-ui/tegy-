@@ -39,7 +39,7 @@ async function viewFor(state, me) {
   // Бухгалтер бачить дані, потрібні для розрахунку тегів і відомостей, але не журнал дій інших.
   if (me.role === "accountant") return { ...full, _loans: (await readKey(LOANS_KEY)) || [], log: (state.log || []).filter((l) => sameName(l.who, me.name)) };
   const own = ownTeams(state, me);
-  const ownPeople = new Set((state.employees || []).filter((e) => own.has(e.teamId)).map((e) => e.id));
+  const ownPeople = new Set((state.employees || []).filter((e) => own.has(e.teamId) || (e.teamHist || []).some((h) => own.has(h.teamId))).map((e) => e.id));
   return {
     ...full,
     teams: (state.teams || []).filter((t) => own.has(t.id)),
@@ -128,13 +128,13 @@ function guardHrd(stored, inc, me) {
   }
 
   // Табель: лише люди своїх команд і лише неподані періоди.
-  const empTeam = new Map((stored.employees || []).map((e) => [e.id, e.teamId]));
+  const empTeam = new Map((stored.employees || []).map((e) => [e.id, [e.teamId, ...(e.teamHist || []).map((h) => h.teamId)].filter(Boolean)]));
   const enBefore = byId(stored.entries);
   for (const x of inc.entries || []) {
     const old = enBefore.get(x.id);
     if (old && (same(old, x) || !newer(x, old))) continue;
-    const team = tmBefore.get(empTeam.get(x.employeeId));
-    if (!team || !own.has(team.id)) return "вносити відсотки можна лише для людей своєї команди";
+    const team = (empTeam.get(x.employeeId) || []).map((id) => tmBefore.get(id)).find((t) => t && own.has(t.id));
+    if (!team) return "вносити відсотки можна лише для людей своєї команди";
     if (Array.isArray(x.hours) && x.hours.length) {
       const hours = cleanHours(x.hours);
       if (!hours) return "забагато годин: у періоді їх не може бути більше 744";
@@ -153,7 +153,7 @@ function guardHrd(stored, inc, me) {
    — поля відомостей ЗП у картках людей (юрособа, Штат/Гіг, фіксований розподіл, «тег як у», виключення);
    — довідник FPV і налаштування відомостей.
    Решта (переведення, проєкти, команди, табель, налаштування) береться з сервера. Повертає текст помилки або null. */
-const ACC_EMP_KEYS = ["name", "position", "extId", "location", "teamId", "teamAlloc", "base"];
+const ACC_EMP_KEYS = ["name", "position", "extId", "location", "teamId", "teamAlloc", "teamHist", "base"];
 const ACC_PAY_KEYS = ["payLegal", "payType", "payFixed", "payLike", "payOff", "fileFixed", "fileType", "payFio", "fileFio"];
 const BENCH = "Бенч"; // системний проєкт за замовчуванням: його не треба додавати в довідник
 const baseProjects = (b) => asAlloc(b).map((x) => x.project).filter(Boolean);
