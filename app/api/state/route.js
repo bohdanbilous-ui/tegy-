@@ -5,6 +5,7 @@ import { LOANS_KEY } from "../../../lib/loans";
 import { whoIs } from "../../../lib/auth";
 import { sameName } from "../../../lib/users";
 import { cleanHours, hoursToAlloc } from "../../../lib/hours";
+import { asAlloc } from "../../../lib/alloc";
 
 export const dynamic = "force-dynamic";
 
@@ -146,22 +147,75 @@ function guardHrd(stored, inc, me) {
   return null;
 }
 
-/* Правки бухгалтера: усе береться з сервера, крім полів відомостей ЗП у картках людей
-   (юрособа, Штат/Гіг, фіксований розподіл, «тег як у», виключення), довідника FPV
-   і налаштувань відомостей. Додавати людей у загальний довідник не може. Повертає текст помилки або null. */
+/* Правки бухгалтера. Бухгалтер веде:
+   — довідник співробітників: ім'я, посада, ід, локація, команда, стартовий проєкт, додавання нових
+     (прибирати людей і заміняти весь довідник може лише адміністратор);
+   — поля відомостей ЗП у картках людей (юрособа, Штат/Гіг, фіксований розподіл, «тег як у», виключення);
+   — довідник FPV і налаштування відомостей.
+   Решта (переведення, проєкти, команди, табель, налаштування) береться з сервера. Повертає текст помилки або null. */
+const ACC_EMP_KEYS = ["name", "position", "extId", "location", "teamId", "teamAlloc", "base"];
+const ACC_PAY_KEYS = ["payLegal", "payType", "payFixed", "payLike", "payOff", "fileFixed", "fileType", "payFio", "fileFio"];
+const BENCH = "Бенч"; // системний проєкт за замовчуванням: його не треба додавати в довідник
+const baseProjects = (b) => asAlloc(b).map((x) => x.project).filter(Boolean);
+
 function guardAccountant(stored, inc, me) {
+  const tomb = stored.deleted || {};
+  // Відомі проєкти — як allProjects у браузері: довідник + ті, що вже трапляються в людях і переведеннях.
+  const projects = new Set([...(stored.projects || []), BENCH]);
+  (stored.employees || []).forEach((e) => baseProjects(e.base).forEach((p) => projects.add(p)));
+  (stored.transfers || []).forEach((t) => [...asAlloc(t.from), ...asAlloc(t.to)].forEach((x) => x.project && projects.add(x.project)));
+  const teamIds = new Set((stored.teams || []).map((t) => t.id));
   const incE = byId(inc.employees);
-  const pick = (list, incMap, keys) => (list || []).map((o) => {
-    const n = incMap.get(o.id);
-    if (!n || !newer(n, o)) return o;
+  const eStored = byId(stored.employees);
+
+  const checkEmp = (e, old) => {
+    e.name = String(e.name || "").trim();
+    if (!e.name) return "у співробітника має бути ім'я";
+    const was = new Set(old ? [...baseProjects(old.base), ...baseProjects(old.teamAlloc)] : []);
+    const unknown = [...baseProjects(e.base), ...baseProjects(e.teamAlloc)].filter((p) => !projects.has(p) && !was.has(p));
+    if (unknown.length) return "проєкту «" + unknown[0] + "» немає в довіднику — нові проєкти додає адміністратор";
+    if (e.teamId && e.teamId !== (old && old.teamId) && !teamIds.has(e.teamId)) return "такої команди немає";
+    return null;
+  };
+
+  const employees = [], touched = new Set();
+  for (const o of stored.employees || []) {
+    const n = incE.get(o.id);
+    // Людину, яку бухгалтер не надіслав, сервер лишає: прибирати може лише адміністратор.
+    if (!n || !newer(n, o)) { employees.push(o); continue; }
     const out = { ...o, updatedAt: n.updatedAt };
-    keys.forEach((k) => { if (n[k]) out[k] = n[k]; else delete out[k]; });
-    return out;
+    ACC_EMP_KEYS.forEach((k) => { if (k in n) out[k] = n[k]; });
+    ACC_PAY_KEYS.forEach((k) => { if (n[k]) out[k] = n[k]; else delete out[k]; });
+    const why = checkEmp(out, o);
+    if (why) return why;
+    employees.push(out); touched.add(out.id);
+  }
+  for (const n of inc.employees || []) {
+    if (eStored.has(n.id) || tomb["e:" + n.id]) continue;
+    const e = { id: n.id, updatedAt: n.updatedAt || nowISO() };
+    ACC_EMP_KEYS.concat(ACC_PAY_KEYS).forEach((k) => { if (k in n) e[k] = n[k]; });
+    if (!e.base) e.base = BENCH;
+    const why = checkEmp(e);
+    if (why) return why;
+    employees.push(e); touched.add(e.id);
+  }
+  // Дублікати імен перевіряємо лише для змінених і нових людей (старі дані не блокують збереження).
+  const names = new Map();
+  employees.filter((e) => !touched.has(e.id)).forEach((e) => names.set(String(e.name || "").trim().toLowerCase(), e.id));
+  for (const e of employees.filter((x) => touched.has(x.id))) {
+    const k = String(e.name || "").trim().toLowerCase();
+    if (names.has(k) && names.get(k) !== e.id) return "співробітник «" + e.name + "» уже є в довіднику";
+    names.set(k, e.id);
+  }
+
+  // Після перейменування в переведеннях оновлюється лише ім'я людини.
+  const nameOf = new Map(employees.filter((e) => touched.has(e.id)).map((e) => [e.id, e.name]));
+  const transfers = (stored.transfers || []).map((t) => {
+    const nm = nameOf.get(t.employeeId);
+    return nm && t.employeeName !== undefined && t.employeeName !== nm ? { ...t, employeeName: nm, updatedAt: nowISO() } : t;
   });
-  const known = new Set((stored.employees || []).map((e) => e.id));
-  if ((inc.employees || []).some((e) => !known.has(e.id) && !(stored.deleted || {})["e:" + e.id])) return "додавати людей може лише адміністратор";
-  const keep = { ...stored };
-  keep.employees = pick(stored.employees, incE, ["payLegal", "payType", "payFixed", "payLike", "payOff", "fileFixed", "fileType", "payFio", "fileFio"]);
+
+  const keep = { ...stored, employees, transfers };
   keep.fpv = inc.fpv || stored.fpv || []; // довідник FPV бухгалтер веде повністю (злиття нижче лишить новіші правки)
   keep.settings = { ...(stored.settings || {}), pay: (inc.settings && inc.settings.pay) || (stored.settings || {}).pay };
   const ownLog = (inc.log || []).filter((l) => sameName(l.who, me.name));

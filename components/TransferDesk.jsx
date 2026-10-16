@@ -727,7 +727,7 @@ export default function TransferDesk() {
   const isAcc = role === "accountant";
   // Бухгалтер працює лише у відомостях ЗП.
   useEffect(() => { if (isAcc && tab !== "pay" && tab !== "lists") setTab("pay"); }, [isAcc, tab]);
-  useEffect(() => { if (isAcc && !["legal", "fpv"].includes(book)) setBook("legal"); }, [isAcc, book]);
+  useEffect(() => { if (isAcc && !["emp", "legal", "fpv"].includes(book)) setBook("legal"); }, [isAcc, book]);
   const allPMs = useMemo(() => uniq(Object.values(pms).flatMap(pmList)), [pms]);
   const isPMof = (project) => !!user && isPm(pms[project], user.name);
   const canDecide = (a) => isAdmin || isPMof(a.project);
@@ -1827,8 +1827,9 @@ export default function TransferDesk() {
   function addEmployee() {
     const n = newEmp.trim();
     if (!n) return setListNote("Впишіть ім'я співробітника.");
-    if (employees.some((e) => e.name.toLowerCase() === n.toLowerCase())) return setListNote("Такий співробітник уже є у списку.");
+    if (employees.some((e) => String(e.name || "").trim().toLowerCase() === n.toLowerCase())) return setListNote("Такий співробітник уже є у списку.");
     const pr = (newEmpProject || "").trim() || "Бенч";
+    if (!isAdmin && pr !== "Бенч" && !allProjects.includes(pr)) return setListNote("Проєкту «" + pr + "» немає в довіднику. Оберіть наявний — нові проєкти додає адміністратор.");
     setEmployees((p) => [...p, { id: uid("e"), name: n, position: newEmpPosition.trim(), base: pr, updatedAt: nowISO() }]);
     if (!allProjects.includes(pr)) { setProjects((x) => [...x, pr]); untomb("p:" + pr); }
     setNewEmp(""); setNewEmpPosition("");
@@ -1993,6 +1994,12 @@ export default function TransferDesk() {
   function applyImport(mode) {
     if (!preview) return;
     if (mode === "replace" && !isAdmin) return denied("замінити весь список може лише адміністратор");
+    if (!isAdmin) {
+      const newProj = uniq([...preview.projects, ...resolveImport(preview).flatMap((x) => asAlloc(x.alloc).map((a) => a.project))]).filter((p) => p !== "Бенч" && !allProjects.includes(p));
+      if (newProj.length) return setListNote("У файлі є проєкти, яких немає в довіднику: " + newProj.slice(0, 5).join(", ") + (newProj.length > 5 ? "…" : "") + ". Нові проєкти додає адміністратор — попросіть додати їх або виправте файл.");
+      const newPp = preview.partners.filter((p) => !partners.includes(p));
+      if (newPp.length) return setListNote("У файлі є People Partners, яких немає в довіднику: " + newPp.slice(0, 5).join(", ") + ". Їх додає адміністратор.");
+    }
     const byName = new Map(employees.map((e) => [e.name.toLowerCase(), e]));
     const byExt = new Map(employees.filter((e) => e.extId).map((e) => [String(e.extId), e]));
     let added = 0;
@@ -3014,7 +3021,7 @@ export default function TransferDesk() {
           <PayDesk employees={employees} setEmployees={setEmployees} fpv={fpv} setFpv={setFpv}
             settings={settings} setSettings={setSettings} codes={codes} codeList={CODES}
             spanCalculator={paySpanCalc} toParts={payParts} token={tokenRef.current}
-            setToast={setToast} pushLog={pushLog} stamp={nowISO} today={today} openCard={isAdmin ? setCardId : null}
+            setToast={setToast} pushLog={pushLog} stamp={nowISO} today={today} openCard={isAdmin || isAcc ? setCardId : null}
             onOpenBook={(b) => { setTab("lists"); setBook(b); }} />
         )}
 
@@ -3532,7 +3539,7 @@ export default function TransferDesk() {
                 {[["emp", "Співробітники", employees.length], ["proj", "Проєкти", allProjects.length],
                   ["legal", "Юрособи", ((settings.pay || {}).legals || []).length], ["fpv", "FPV", (fpv || []).filter((f) => f.active !== false).length],
                   ["pp", "People Partners", partners.length], ["reason", "Підстави", allReasons.length],
-                  ["users", "Користувачі", ""], ["cfg", "Налаштування", ""]].filter(([k]) => !isAcc || k === "legal" || k === "fpv").map(([k, l, n]) => (
+                  ["users", "Користувачі", ""], ["cfg", "Налаштування", ""]].filter(([k]) => !isAcc || k === "emp" || k === "legal" || k === "fpv").map(([k, l, n]) => (
                   <button key={k} onClick={() => setBook(k)} aria-current={book === k}
                     style={{ cursor: "pointer", border: "none", background: book === k ? C.ink : "transparent",
                       color: book === k ? "#fff" : C.ink2, padding: "10px 16px", borderRadius: 8, marginBottom: 6,
@@ -3549,10 +3556,10 @@ export default function TransferDesk() {
               <PayDesk mode={book} employees={employees} setEmployees={setEmployees} fpv={fpv} setFpv={setFpv}
                 settings={settings} setSettings={setSettings} codes={codes} codeList={CODES}
                 spanCalculator={paySpanCalc} toParts={payParts} token={tokenRef.current}
-                setToast={setToast} pushLog={pushLog} stamp={nowISO} today={today} openCard={isAdmin ? setCardId : null} />
+                setToast={setToast} pushLog={pushLog} stamp={nowISO} today={today} openCard={isAdmin || isAcc ? setCardId : null} />
             )}
 
-            {isAdmin && book === "emp" && (
+            {(isAdmin || isAcc) && book === "emp" && (
               <>
                 {isAdmin && (
                   <section style={{ ...card, padding: 20 }}>
@@ -3599,7 +3606,7 @@ export default function TransferDesk() {
                     )}
                   </section>
                 )}
-                {pf && (pf.changes || []).length > 0 && (
+                {isAdmin && pf && (pf.changes || []).length > 0 && (
                   <PfChanges changes={pf.changes} buMap={pf.buMap || {}} employees={employees} transfers={transfers} teams={teams}
                     projects={allProjects.filter((x) => !offProject(x))} codes={codes} onDecide={decidePf} />
                 )}
@@ -4074,12 +4081,14 @@ export default function TransferDesk() {
                 })}
               </div>
 
-              <div style={{ padding: "0 22px 22px" }}>
-                <button style={{ ...addBtn, background: C.signal, fontWeight: 600 }}
-                  onClick={() => { setSelectedId(cardEmp.id); resetDist(); setErrors([]); setTab("form"); setCardId(null); }}>
-                  Створити переведення
-                </button>
-              </div>
+              {!isAcc && (
+                <div style={{ padding: "0 22px 22px" }}>
+                  <button style={{ ...addBtn, background: C.signal, fontWeight: 600 }}
+                    onClick={() => { setSelectedId(cardEmp.id); resetDist(); setErrors([]); setTab("form"); setCardId(null); }}>
+                    Створити переведення
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         );
@@ -4383,7 +4392,7 @@ function UsersBook({ token, me }) {
                         const r = e.target.value;
                         patch(u.username, { role: r }, "Змінити роль «" + u.displayName + "» на «" + ROLE_LABEL[r] + "»?" +
                           (r === "admin" ? " Адміністратор бачить і править усе." : r === "hrd" ? " HRD проводитиме переведення й вестиме табель своєї команди."
-                            : r === "accountant" ? " Бухгалтер бачитиме лише відомості ЗП з ІПН і вестиме їх: розподіл, юрособи, Штат/Гіг, довідник FPV."
+                            : r === "accountant" ? " Бухгалтер вестиме відомості ЗП з ІПН (розподіл, юрособи, Штат/Гіг, довідник FPV) і довідник співробітників: додавати людей, правити ім'я, посаду, команду й стартовий проєкт."
                             : r === "pm" ? " PM погоджуватиме переведення своїх проєктів, вноситиме факт (години) по людях, яких приймає його проєкт, і підтверджуватиме факт по своїх людях. Його ім'я має стояти в полі «PM, який погоджує» проєкту (PM може бути кілька, через «;»)." : ""));
                       }}
                       style={{ padding: "6px 8px", minWidth: 170 }}
