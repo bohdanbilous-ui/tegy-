@@ -110,14 +110,18 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
 
   /* ─── розрахунок рядків відомостей ─── */
   const rows = useMemo(() => {
-    const calcs = { staff: spanCalculator(spans.staff.from, spans.staff.to), gig: spanCalculator(spans.gig.from, spans.gig.to) };
+    const monthSpan = spanOf("month");
+    const calcs = { staff: spanCalculator(spans.staff.from, spans.staff.to), gig: spanCalculator(spans.gig.from, spans.gig.to),
+      month: spanCalculator(monthSpan.from, monthSpan.to) };
     const list = [];
     employees.forEach((e) => {
       const type = e.payType || e.fileType || "";
-      const sp = spans[TYPE_KEY[type] || "staff"];
+      // Парттайм платимо раз на місяць: у відомості другої половини, з тегом за весь місяць.
+      if (e.partTime && per.half === 1) return;
+      const sp = e.partTime ? monthSpan : spans[TYPE_KEY[type] || "staff"];
       if (e.hiredOn && e.hiredOn > sp.to) return;
       if (e.leftOn && e.leftOn < sp.from) return;
-      const calc = calcs[TYPE_KEY[type] || "staff"](e);
+      const calc = (e.partTime ? calcs.month : calcs[TYPE_KEY[type] || "staff"])(e);
       const fixedStr = e.payFixed || e.fileFixed || "";
       let parts, source, notes = calc.notes;
       if (calc.kind === "облік" || calc.kind === "змішано") { parts = toParts(calc.alloc); source = "табель"; }
