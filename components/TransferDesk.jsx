@@ -8,7 +8,7 @@ import { workingOn, inTeamOn, lastTeamId } from "../lib/people";
 import { orderProjects, isInactive } from "../lib/projects";
 import { applyLoans, confirmedIndex, normHours, loanText, loanFits } from "../lib/loans";
 import { pmList, isPm, pmNormalize, pmText, parsePmLines } from "../lib/pms";
-import { donorState, carryApprovals } from "../lib/alloc";
+import { donorState, carryApprovals, allocAt } from "../lib/alloc";
 import TeamDesk from "./TeamDesk";
 import Reminders from "./Reminders";
 import PayDesk from "./PayDesk";
@@ -187,14 +187,6 @@ const SEED_REASONS = [
 const SEED_EMPLOYEES = [];
 const SEED_TRANSFERS = [];
 
-function allocAt(emp, transfers, dateISO) {
-  let a = asAlloc(emp.base);
-  transfers
-    .filter((t) => t.employeeId === emp.id && !t.cancelled && t.effectiveDate <= dateISO)
-    .sort((x, y) => x.effectiveDate.localeCompare(y.effectiveDate) || x.createdAt.localeCompare(y.createdAt))
-    .forEach((t) => { a = (!t.temporary || !t.returnDate || t.returnDate > dateISO) ? asAlloc(t.to) : asAlloc(t.from); });
-  return a;
-}
 /* Розподіл за переведеннями на відрізок днів: кожен день важить однаково,
    тож переведення з середини періоду дає частку пропорційно дням.
    Дні до найму й після звільнення не рахуються. */
@@ -1544,8 +1536,20 @@ export default function TransferDesk() {
     const rows = finData.rows.filter((r) => r.alloc.length);
     if (!rows.length) return setToast("За " + finLabel(finMonth) + " ще немає жодних даних.");
     const empty = finData.rows.length - rows.length;
+    // Місяць, що ще не скінчився, чи неподані періоди — закриття лише як свідоме виняткове рішення з причиною.
+    const notEnded = todayISO() <= lastDayISO(finMonth.y, finMonth.m);
+    const gaps = [
+      notEnded && "місяць ще не закінчився (до " + fmt(lastDayISO(finMonth.y, finMonth.m)) + ")",
+      finOpen.length && "не всі періоди подано: " + finOpen.map((t) => t.name + " (" + [!t.h1 && "01–15", !t.h2 && "16–" + finDays].filter(Boolean).join(", ") + ")").join("; "),
+    ].filter(Boolean);
+    let force = "";
+    if (gaps.length) {
+      const why = window.prompt("Закрити " + finLabel(finMonth) + " зараз не можна без виняткового рішення:\n• " + gaps.join("\n• ") +
+        "\n\nТеги за відсутні половини візьмуться з іншої половини або за довідником.\nЩоб усе одно закрити, вкажіть причину (запишеться в журнал):");
+      force = (why || "").trim();
+      if (!force) return setToast("Місяць не закрито: без причини винятку закривати неповні дані не можна.");
+    }
     const msg = "Закрити " + finLabel(finMonth) + " для фін. обліку? Цифри й теги зафіксуються для " + rows.length + " " + plural(rows.length, "людини", "людей", "людей") + "." +
-      (finOpen.length ? "\n\nНе всі періоди подано: " + finOpen.map((t) => t.name).join(", ") + "." : "") +
       (empty ? "\n\nБез даних " + empty + " — у звіт не потраплять." : "");
     if (!window.confirm(msg)) return;
     const stamp = nowISO();
@@ -1553,9 +1557,9 @@ export default function TransferDesk() {
       e: r.id, name: r.name, a: r.alloc.map((x) => [x.project, x.percent]), t: r.tag,
       ...(r.manual ? { m: 1, b: r.by } : {}), ...(r.note ? { n: r.note } : {}),
     }));
-    const rec = { id: "fc_" + finKey, kind: "close", monthKey: finKey, closed: true, by: user.name, at: stamp, rows: snapRows, updatedAt: stamp, updatedBy: user.name };
+    const rec = { id: "fc_" + finKey, kind: "close", monthKey: finKey, closed: true, by: user.name, at: stamp, rows: snapRows, updatedAt: stamp, updatedBy: user.name, ...(force ? { force, gaps } : {}) };
     setFin((p) => [...p.filter((x) => x.id !== rec.id), rec]);
-    pushLog("закрив місяць для фін. обліку", finLabel(finMonth) + ", " + rows.length + " " + plural(rows.length, "людина", "людини", "людей"));
+    pushLog("закрив місяць для фін. обліку", finLabel(finMonth) + ", " + rows.length + " " + plural(rows.length, "людина", "людини", "людей") + (force ? " · виняток: " + force : ""));
     setToast("Місяць закрито: " + finLabel(finMonth));
   }
   function reopenMonth() {
@@ -3040,7 +3044,7 @@ export default function TransferDesk() {
                 </div>
                 {finClosed && (
                   <span style={{ background: C.signalSoft, color: C.signal, borderRadius: 999, padding: "2px 9px", fontSize: 12, fontWeight: 600 }}>
-                    закрито · {finClose.by}, {fmtDT(finClose.at)}
+                    закрито · {finClose.by}, {fmtDT(finClose.at)}{finClose.force ? " · виняток: " + finClose.force : ""}
                   </span>
                 )}
                 <input type="text" value={finQuery} onChange={(e) => setFinQuery(e.target.value)} placeholder="Пошук за прізвищем"
