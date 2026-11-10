@@ -183,7 +183,7 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
         </div>
       </header>
 
-      <main style={{ maxWidth: 1200, margin: "0 auto", padding: 18, display: "grid", gap: 12 }}>
+      <main style={{ maxWidth: 1200, margin: "0 auto", padding: 18, display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 12 }}>
         {!data && <section style={{ ...card, padding: 30, color: C.muted }}>Завантажуємо…</section>}
 
         {data && !data.myProjects.length && !isAdmin && (
