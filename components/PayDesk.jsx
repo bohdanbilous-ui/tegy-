@@ -76,6 +76,8 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
   const [query, setQuery] = useState("");
   const [shown, setShown] = useState(80);
   const [showTpl, setShowTpl] = useState(false);
+  const [sel, setSel] = useState({});
+  const [showAdv, setShowAdv] = useState(false);
   const [sent, setSent] = useState(null);
   const [imp, setImp] = useState(null);
   const [newFpv, setNewFpv] = useState("");
@@ -175,7 +177,17 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
     return [...m.values()].sort((a, b) => (a.type || "я").localeCompare(b.type || "я", "uk") || (a.legal || "я").localeCompare(b.legal || "я", "uk"));
   }, [included]);
   const q = low(query);
-  const visible = rows.filter((r) => (view === "all" ? true : view === "bad" ? !r.off && r.problems.length : view === "off" ? r.off : view === "fpv" ? r.kind === "fpv" : !r.off && r.key === view)
+  // Типи проблем: щоб бухгалтер бачив, що саме не готово, і одним кліком відфільтрував рядки.
+  const ISSUES = [
+    ["inn", "без ІПН", (t) => t === "немає ІПН"],
+    ["legal", "без юрособи", (t) => t.startsWith("немає юрособи") || t.startsWith("юрособи «")],
+    ["type", "без типу Штат/Гіг", (t) => t.startsWith("немає типу")],
+    ["fio", "ПІБ неповний", (t) => t.startsWith("ПІБ")],
+    ["alloc", "розподіл і коди", (t) => t.startsWith("немає розподілу") || t.startsWith("без коду") || t.startsWith("невідомий код") || t.startsWith("сума")],
+  ];
+  const issueCounts = ISSUES.map(([k, l, test]) => ({ k, l, n: included.filter((r) => r.problems.some(test)).length })).filter((x) => x.n);
+  const issueTest = (k) => (ISSUES.find((x) => x[0] === k) || [])[2];
+  const visible = rows.filter((r) => (view === "all" ? true : view.startsWith("issue:") ? !r.off && r.problems.some(issueTest(view.slice(6)) || (() => false)) : view === "bad" ? !r.off && r.problems.length : view === "off" ? r.off : view === "fpv" ? r.kind === "fpv" : !r.off && r.key === view)
     && (!q || low(r.name).includes(q) || low(r.short).includes(q) || low(r.tagBody).includes(q)));
   const badCount = included.filter((r) => r.problems.length).length;
   const perLabel = MONTHS[per.m - 1] + " " + per.y;
@@ -185,6 +197,8 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
   const setEmp = (id, patch) => setEmployees((p) => p.map((x) => (x.id === id ? { ...x, ...patch, updatedAt: stamp() } : x)));
   const setF = (id, patch) => setFpv((p) => p.map((x) => (x.id === id ? { ...x, ...patch, updatedAt: stamp() } : x)));
   const edit = (r, patch) => (r.kind === "fpv" ? setF(r.id, patch) : setEmp(r.id, patch));
+  const selRows = rows.filter((r) => sel[r.id]);
+  const bulk = (patchOf) => { selRows.forEach((r) => edit(r, patchOf(r))); setToast("Змінено: " + selRows.length + " " + plural(selRows.length, "рядок", "рядки", "рядків") + "."); setSel({}); };
   const likeId = (name) => { const n = low(name); if (!n) return ""; const r = rows.find((x) => low(x.name) === n || low(x.short) === n); return r ? r.id : null; };
 
   function askFio(r) {
@@ -395,6 +409,21 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
         )}
       </section>
 
+      <section style={{ ...card, padding: "14px 20px", borderColor: badCount ? "#FED7AA" : "#BBF7D0" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontWeight: 600, color: badCount ? C.warn : "#15803D" }}>
+            {included.length === 0 ? "Немає кого вивантажувати" : badCount ? "Не готово: " + badCount + " з " + included.length + " " + plural(included.length, "рядка", "рядків", "рядків") : "Усе готово до вивантаження · " + included.length + " " + plural(included.length, "людина", "людини", "людей")}
+          </span>
+          {issueCounts.map((x) => (
+            <button key={x.k} onClick={() => setView(view === "issue:" + x.k ? "all" : "issue:" + x.k)}
+              style={{ cursor: "pointer", borderRadius: 16, padding: "4px 11px", fontSize: 12.5, border: "1px solid " + (view === "issue:" + x.k ? C.warn : "#FED7AA"),
+                background: view === "issue:" + x.k ? C.warn : C.warnSoft, color: view === "issue:" + x.k ? "#fff" : C.warn }}>
+              {x.l} · {x.n}
+            </button>
+          ))}
+        </div>
+      </section>
+
       <section style={{ ...card, padding: "14px 20px" }}>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
           <button style={chip(view === "all")} onClick={() => setView("all")}>Усі · {rows.length}</button>
@@ -406,28 +435,53 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
           <button style={chip(view === "bad")} onClick={() => setView("bad")}>З проблемами · {badCount}</button>
           <button style={chip(view === "fpv")} onClick={() => setView("fpv")}>FPV · {rows.filter((r) => r.kind === "fpv").length}</button>
           <button style={chip(view === "off")} onClick={() => setView("off")}>Виключені · {rows.filter((r) => r.off).length}</button>
-          <input type="text" value={query} onChange={(e) => { setQuery(e.target.value); setShown(80); }} placeholder="Пошук: ім'я або код" aria-label="Пошук у відомостях" style={{ width: 220, marginLeft: "auto" }} />
+          <button className="link" style={{ marginLeft: "auto", fontSize: 12.5 }} aria-pressed={showAdv} onClick={() => setShowAdv((v) => !v)}>
+            {showAdv ? "Сховати «Фікс. розподіл» і «Тег як у»" : "Показати «Фікс. розподіл» і «Тег як у»"}
+          </button>
+          <input type="text" value={query} onChange={(e) => { setQuery(e.target.value); setShown(80); }} placeholder="Пошук: ім'я або код" aria-label="Пошук у відомостях" style={{ width: 220 }} />
         </div>
       </section>
+
+      {canEdit && selRows.length > 0 && (
+        <section style={{ ...card, padding: "10px 16px", background: C.signalSoft, borderColor: "#BFDBFE", position: "sticky", top: 8, zIndex: 5 }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <b>Вибрано {selRows.length}</b>
+            <select value="" aria-label="Масово: тип" style={{ width: "auto" }} onChange={(e) => { if (e.target.value) bulk((r) => (r.kind === "fpv" ? { type: e.target.value } : { payType: e.target.value })); }}>
+              <option value="">Тип…</option><option value="Штат">Штат</option><option value="Гіг">Гіг</option>
+            </select>
+            <select value="" aria-label="Масово: юрособа" style={{ width: "auto", maxWidth: 220 }} onChange={(e) => { if (e.target.value) bulk((r) => (r.kind === "fpv" ? { legal: e.target.value } : { payLegal: e.target.value })); }}>
+              <option value="">Юрособа…</option>{legalNames.map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+            <button className="ghost" onClick={() => bulk((r) => (r.kind === "fpv" ? {} : { payOff: !r.off }))}>Виключити / повернути</button>
+            <button className="link" style={{ marginLeft: "auto" }} onClick={() => setSel({})}>зняти вибір</button>
+          </div>
+        </section>
+      )}
 
       <section style={{ ...card, overflow: "hidden" }}>
         <div style={{ overflowX: "auto" }}>
           <table>
             <thead>
               <tr>
+                {canEdit && <th style={{ width: 34 }}>
+                  <input type="checkbox" aria-label="Вибрати всі видимі" style={{ width: "auto" }}
+                    checked={visible.length > 0 && visible.slice(0, shown).every((r) => sel[r.id])}
+                    onChange={(e) => setSel(e.target.checked ? Object.fromEntries(visible.slice(0, shown).map((r) => [r.id, true])) : {})} />
+                </th>}
                 <th style={{ minWidth: 230, position: "sticky", left: 0, background: C.surface }}>ПІБ</th>
                 <th style={{ minWidth: 110 }}>Тип</th>
                 <th style={{ minWidth: 170 }}>Юрособа</th>
                 <th style={{ minWidth: 80 }}>ІПН</th>
                 <th style={{ minWidth: 220 }}>Тег</th>
-                <th style={{ minWidth: 200 }}>Фікс. розподіл</th>
-                <th style={{ minWidth: 170 }}>Тег як у</th>
+                {showAdv && <th style={{ minWidth: 200 }}>Фікс. розподіл</th>}
+                {showAdv && <th style={{ minWidth: 170 }}>Тег як у</th>}
                 <th style={{ minWidth: 70, textAlign: "center" }}>У відомість</th>
               </tr>
             </thead>
             <tbody>
               {visible.slice(0, shown).map((r) => (
                 <tr key={r.id} style={r.off ? { opacity: 0.55 } : undefined}>
+                  {canEdit && <td><input type="checkbox" aria-label={"Вибрати " + r.name} style={{ width: "auto" }} checked={!!sel[r.id]} onChange={(e) => setSel((m) => ({ ...m, [r.id]: e.target.checked }))} /></td>}
                   <td style={{ position: "sticky", left: 0, background: C.surface }}>
                     {r.kind === "emp" && openCard
                       ? <button className="link" style={{ color: C.ink, textDecoration: "none", fontWeight: 600, textAlign: "left" }} onClick={() => openCard(r.id)}>{r.name}</button>
@@ -467,6 +521,7 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
                     {inn[r.id] && <div><button className="link" style={{ fontSize: 11 }} onClick={() => revealInn(r)}>{shownInn[r.id] ? "сховати" : "показати"}</button></div>}
                   </td>
                   <td className="num" style={{ fontSize: 12, wordBreak: "break-all", color: r.tag ? C.ink : C.muted, fontWeight: 600 }}>{r.tag || "—"}</td>
+                  {showAdv && (<>
                   <td style={{ padding: 4 }}>
                     <input type="text" defaultValue={r.fixed} key={r.id + "|" + r.fixed} placeholder={r.fileFixed ? "з файлу: " + r.fileFixed : "напр. cbx-80,cbx_pos-20"}
                       aria-label={"Фіксований розподіл, " + r.name} className="num" style={{ fontSize: 12 }} disabled={!canEdit}
@@ -483,6 +538,7 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
                         onBlur={(e) => { const id = likeId(e.target.value); if (id === null) return setToast("Не знайшов «" + e.target.value + "» — оберіть зі списку."); setEmp(r.id, { payLike: id }); }} />
                     ) : <span style={small}>—</span>}
                   </td>
+                  </>)}
                   <td style={{ textAlign: "center" }}>
                     {r.kind === "emp"
                       ? <input type="checkbox" checked={!r.off} disabled={!canEdit} aria-label={"У відомість, " + r.name} style={{ width: "auto" }} onChange={(e) => setEmp(r.id, { payOff: !e.target.checked })} />
