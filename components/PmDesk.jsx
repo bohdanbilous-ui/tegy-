@@ -110,7 +110,6 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
     .map((a) => ({ action: "decide", transferId: t.id, project: a.project, ok: true, comment: "" })));
   const incomingReqs = incomingPending.flatMap((x) => (x.approvals || []).filter((a) => a.role === "give" && mine.has(a.project) && a.status === "pending")
     .map((a) => ({ action: "req-decide", requestId: x.id, project: a.project, ok: true, comment: "" })));
-  const confirmReqs = toConfirm.map((l) => ({ action: "loan-decide", id: l.id, ok: true, comment: "" }));
   const bulk = (reqs, what, doneText) => {
     if (!reqs.length) return;
     if (!window.confirm(what + ": " + reqs.length + ". Підтвердити все одразу? Заперечити можна лише окремо, з коментарем.")) return;
@@ -208,8 +207,7 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
         {data && tab === "people" && <People data={data} mine={mine} q={q} setQ={setQ} card={card} />}
         {data && tab === "loans" && <Facts data={data} mine={mine} isAdmin={isAdmin} busy={busy} act={act} card={card} />}
         {data && tab === "history" && <History data={data} card={card} />}
-        {data && tab === "confirm" && <Confirm data={data} mine={mine} isAdmin={isAdmin} list={toConfirm} notes={notes} setNotes={setNotes} busy={busy} act={act} card={card}
-          onConfirmAll={() => bulk(confirmReqs, "Підтвердити записів годин", "Підтверджено")} />}
+        {data && tab === "confirm" && <Confirm data={data} mine={mine} isAdmin={isAdmin} list={toConfirm} notes={notes} setNotes={setNotes} busy={busy} act={act} card={card} />}
         {data && tab === "request" && <Request data={data} busy={busy} act={act} card={card} addBtn={addBtn} label={label} />}
       </main>
 
@@ -296,7 +294,7 @@ function Home({ data, card, go, counts, overdue, isAdmin, busy, act }) {
       <Info>
         PM — людина, вписана в поле «PM, який погоджує» проєкту. Ви: 1) погоджуєте переведення людей ваших проєктів; 2) вносите години по тимчасових і часткових переведеннях,
         які приймає ваш проєкт; 3) підтверджуєте години колег по ваших людях; 4) подаєте заявку, якщо вам потрібна людина з іншого проєкту.
-        Переведення діє з дати незалежно від погодження — ви підтверджуєте вже доконане. Масові кнопки «Погодити всі» є у відповідних розділах, а заперечити можна лише окремо, з коментарем.
+        Переведення діє з дати незалежно від погодження — ви підтверджуєте вже доконане. Години підтверджуються лише по одному запису; «Погодити всі» є тільки для переведень і запитів у розділі «Погодження».
         Факт за половину місяця треба внести до {FACT_GRACE_DAYS}-го дня після її завершення, бо за ним іде відомість ЗП.
       </Info>
     </section>
@@ -614,7 +612,7 @@ function Facts({ data, mine, isAdmin, busy, act, card }) {
 }
 
 /* ── підтвердження факту: PM проєкту, звідки людина ── */
-function Confirm({ data, mine, isAdmin, list, notes, setNotes, busy, act, card, onConfirmAll }) {
+function Confirm({ data, mine, isAdmin, list, notes, setNotes, busy, act, card }) {
   const meName = String((data.me && data.me.name) || "").trim().toLowerCase();
   const own = (l) => String(l.createdBy || "").trim().toLowerCase() === meName;
   const decided = data.loans.filter((l) => l.status !== "pending" && (isAdmin || lendersOf(l).some((p) => mine.has(p)))).slice(0, 60);
@@ -623,7 +621,6 @@ function Confirm({ data, mine, isAdmin, list, notes, setNotes, busy, act, card, 
       <section style={{ ...card, padding: 20, display: "grid", gap: 12 }}>
         <div style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
           <h2 style={{ margin: 0, fontSize: 17 }}>Факт по ваших людях на інших проєктах</h2>
-          {list.length > 0 && <button className="ghost" disabled={busy} onClick={onConfirmAll} style={{ marginLeft: "auto" }}>Підтвердити всі · {list.length}</button>}
           <Info style={{ flexBasis: "100%", margin: "0" }}>
             PM проєкту, який приймає людину, вніс, скільки годин вона фактично відпрацювала в нього за період. Після вашого підтвердження ці години змінять тег людини:
             частка проєкту, що приймає, стане за фактом, а решта піде вашим проєктам. Підтвердити може будь-хто з PM проєкту; власні записи підтверджувати не можна.
