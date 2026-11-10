@@ -10,6 +10,7 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
 import Info from "./Info";
+import { reconCall } from "./ReconDesk";
 
 const C = {
   paper: "#F5F7FB", surface: "#FFFFFF", ink: "#0F172A", ink2: "#334155",
@@ -217,6 +218,16 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
     let h = 5381; for (let i = 0; i < str.length; i++) h = ((h * 33) ^ str.charCodeAt(i)) >>> 0;
     return String(h);
   }, [included]);
+  // Звірка PM за цей період (лише для основної відомості). Якщо години за період завантажено, а якісь проєкти не підтверджені — затвердження потребує причини.
+  const [recon, setRecon] = useState(null);
+  useEffect(() => {
+    if (mode !== "pay" || !token) return;
+    let off = false;
+    reconCall(token, "GET", null, perKey).then((x) => { if (!off) setRecon(x); }).catch(() => { if (!off) setRecon(null); });
+    return () => { off = true; };
+  }, [token, perKey, mode]);
+  const reconLoaded = !!(recon && recon.hours);
+  const reconOpen = reconLoaded ? recon.summary.filter((x) => x.state !== "confirmed") : [];
   const approval = (pay.approvals || {})[perKey];
   const stale = !!approval && approval.fp !== fingerprint;
   const fmtAt = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : pad(d.getDate()) + "." + pad(d.getMonth() + 1) + " " + pad(d.getHours()) + ":" + pad(d.getMinutes()); };
@@ -247,8 +258,15 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
   const bulk = (patchOf) => { selRows.forEach((r) => edit(r, patchOf(r))); setToast("Змінено: " + selRows.length + " " + plural(selRows.length, "рядок", "рядки", "рядків") + "."); setSel({}); };
   const approve = () => {
     if (badCount || !included.length) return;
-    setPay({ approvals: { ...(pay.approvals || {}), [perKey]: { by: userName || "—", at: stamp(), fp: fingerprint, count: included.length } } });
-    pushLog("затвердив відомості ЗП", perLabel + " · " + (per.half === 1 ? "01–15" : "16–" + lastDay(per.y, per.m)) + " · " + included.length + " людей");
+    let reason = "";
+    if (reconOpen.length) {
+      const v = window.prompt("Звірка PM не завершена по проєктах: " + reconOpen.map((x) => x.project).join(", ") + ".\nЗатвердити відомості без неї? Вкажіть причину (обов'язково):");
+      if (v === null) return;
+      reason = v.trim();
+      if (reason.length < 3) { setToast("Потрібна причина затвердження без звірки PM."); return; }
+    }
+    setPay({ approvals: { ...(pay.approvals || {}), [perKey]: { by: userName || "—", at: stamp(), fp: fingerprint, count: included.length, ...(reason ? { reason } : {}) } } });
+    pushLog("затвердив відомості ЗП" + (reason ? " без повної звірки PM (" + reason + ")" : ""), perLabel + " · " + (per.half === 1 ? "01–15" : "16–" + lastDay(per.y, per.m)) + " · " + included.length + " людей");
   };
   const unapprove = () => {
     const next = { ...(pay.approvals || {}) }; delete next[perKey];
@@ -489,6 +507,7 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
                 <span style={{ fontSize: 12.5, color: stale ? C.warn : "#15803D", fontWeight: 600 }}>
                   {stale ? "Затверджено, але далі змінилось" : "✓ Затверджено"} · {approval.by}, {fmtAt(approval.at)}
                 </span>
+                {approval.reason && <span style={{ fontSize: 12.5, color: C.warn }}>без повної звірки PM: «{approval.reason}»</span>}
                 {stale && canEdit && <button className="ghost" disabled={!!badCount} onClick={approve}>Затвердити знову</button>}
                 {canEdit && <button className="link" style={{ fontSize: 12.5 }} onClick={unapprove}>зняти</button>}
               </>
@@ -498,6 +517,25 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
             )}
           </span>
         </div>
+        {mode === "pay" && recon && (
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 8, fontSize: 12.5 }}>
+            {!reconLoaded ? (
+              <span style={{ color: C.muted }}>Звірка PM за цей період не проводилась (годин із трекерів немає).</span>
+            ) : !reconOpen.length ? (
+              <span style={{ color: "#15803D", fontWeight: 600 }}>✓ Звірку PM підтверджено по всіх проєктах ({recon.summary.length})</span>
+            ) : (
+              <>
+                <span style={{ color: C.warn, fontWeight: 600 }}>Звірка PM: підтверджено {recon.summary.length - reconOpen.length} з {recon.summary.length} проєктів. Чекаємо:</span>
+                {reconOpen.map((x) => (
+                  <span key={x.project} title={x.state === "stale" ? "Підтвердження застаріло — цифри змінились" : x.open ? "Відхилень без рішення: " + x.open : "Готово, PM ще не підтвердив"}
+                    style={{ borderRadius: 16, padding: "2px 10px", border: "1px solid #FED7AA", background: C.warnSoft, color: C.warn }}>
+                    {x.project}{x.state === "stale" ? " · застаріла" : ""}
+                  </span>
+                ))}
+              </>
+            )}
+          </div>
+        )}
         <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", marginTop: 8, fontSize: 12.5 }}>
           <label style={{ color: C.muted }}>Порівняти з{" "}
             <select value={cmp} onChange={(e) => setCmp(e.target.value)} aria-label="Порівняння з попереднім періодом" style={{ width: "auto", padding: "4px 8px" }}>

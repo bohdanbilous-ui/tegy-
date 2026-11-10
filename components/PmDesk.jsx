@@ -12,6 +12,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import { normHours, lendersOf } from "../lib/loans";
 import { pmText } from "../lib/pms";
 import Info from "./Info";
+import ReconDesk, { reconCall } from "./ReconDesk";
 
 const C = {
   paper: "#F5F7FB", surface: "#FFFFFF", ink: "#0F172A", ink2: "#334155",
@@ -62,7 +63,7 @@ async function call(token, method, body) {
 
 export default function PmDesk({ user, token, onSignOut, onApiError }) {
   const [data, setData] = useState(null);
-  const TAB_KEYS = ["request", "home", "approve", "people", "loans", "confirm", "history"];
+  const TAB_KEYS = ["request", "home", "approve", "people", "loans", "recon", "confirm", "history"];
   const [tab, setTabState] = useState("request");
   // Розділ у адресі (#approve): оновлення сторінки й «назад» не кидають на головну.
   useEffect(() => {
@@ -75,8 +76,11 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
   const [busy, setBusy] = useState(false);
   const [notes, setNotes] = useState({});
   const [q, setQ] = useState("");
+  const [reconBadge, setReconBadge] = useState(0);
+  const badgeOf = (r) => (r && r.hours && r.finished ? r.summary.filter((x) => x.state !== "confirmed").length : 0);
 
   async function load() {
+    reconCall(token, "GET").then((r) => setReconBadge(badgeOf(r))).catch(() => {});
     try { setData(await call(token, "GET")); }
     catch (e) { if (e.status === 401) onApiError && onApiError(e); else setToast(e.message); }
   }
@@ -162,6 +166,7 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
     ["approve", "Погодження", pendingApprovals.length + incomingPending.length],
     ["people", "Люди", 0],
     ["loans", "Внести факт", data ? data.todo.length : 0],
+    ["recon", "Звірка", reconBadge],
     ["confirm", "Години колег", toConfirm.length],
     ["history", "Історія рішень", 0],
   ];
@@ -222,6 +227,7 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
         {data && tab === "people" && <People data={data} mine={mine} q={q} setQ={setQ} card={card} />}
         {data && tab === "loans" && <Facts data={data} mine={mine} isAdmin={isAdmin} busy={busy} act={act} card={card} />}
         {data && tab === "history" && <History data={data} card={card} />}
+        {data && tab === "recon" && <ReconDesk token={token} C={C} card={card} addBtn={addBtn} onApiError={onApiError} setToast={setToast} onChanged={(r) => setReconBadge(badgeOf(r))} />}
         {data && tab === "confirm" && <Confirm data={data} mine={mine} isAdmin={isAdmin} list={toConfirm} notes={notes} setNotes={setNotes} busy={busy} act={act} card={card} />}
         {data && tab === "request" && <Request data={data} busy={busy} act={act} card={card} addBtn={addBtn} label={label} />}
       </main>
@@ -952,5 +958,17 @@ export function LoansAdmin({ token, onChanged, setToast }) {
         </div>
       )}
     </section>
+  );
+}
+
+/* Звірка для адміністратора (вкладка «Звірка PM» у розділі «Переведення»): бачить усі проєкти, завантажує години й задає допуск. */
+export function ReconAdmin({ token, setToast, onApiError }) {
+  const card = { background: C.surface, border: "1px solid " + C.line, borderRadius: 10, boxShadow: "0 1px 2px rgba(15,23,42,.04)" };
+  const addBtn = { cursor: "pointer", background: C.signal, color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontWeight: 600, whiteSpace: "nowrap" };
+  return (
+    <div className="pm" style={{ display: "grid", gap: 12, fontFamily: SANS, color: C.ink, fontSize: 14 }}>
+      <style>{`.pm table{border-collapse:separate;border-spacing:0;width:100%}.pm th,.pm td{text-align:left;padding:8px 12px;vertical-align:top}.pm th{font-size:11.5px;font-weight:600;color:${C.muted};text-transform:uppercase;letter-spacing:.04em;background:#F8FAFC;border-bottom:1px solid ${C.line}}.pm td{border-bottom:1px solid ${C.lineSoft};font-size:13.5px}.pm .num{font-variant-numeric:tabular-nums}.pm .ghost{cursor:pointer;background:${C.surface};border:1px solid ${C.line};border-radius:8px;padding:8px 13px;color:${C.ink2};font-weight:500}.pm .link{cursor:pointer;background:none;border:none;padding:0;color:${C.signal};font-weight:500}.pm input[type=text],.pm input[type=number],.pm select,.pm textarea{border:1px solid ${C.line};border-radius:8px;padding:7px 9px;background:#fff;min-height:36px}`}</style>
+      <ReconDesk token={token} C={C} card={card} addBtn={addBtn} onApiError={onApiError} setToast={setToast} />
+    </div>
   );
 }

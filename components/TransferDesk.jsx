@@ -14,7 +14,7 @@ import TeamDesk from "./TeamDesk";
 import Reminders from "./Reminders";
 import PayDesk from "./PayDesk";
 import PfChanges from "./PfChanges";
-import PmDesk, { LoansAdmin } from "./PmDesk";
+import PmDesk, { LoansAdmin, ReconAdmin } from "./PmDesk";
 
 /* Вхід через Google: NEXT_PUBLIC_GOOGLE_CLIENT_ID і NEXT_PUBLIC_ALLOWED_DOMAIN.
    Токен перевіряється на сервері (app/api/state/route.js). */
@@ -2302,19 +2302,20 @@ export default function TransferDesk() {
       <style>{css}</style>
       {(() => {
         /* Навігація: розділи — у бічному меню, вкладки розділу — над сторінкою. */
-        const allowed = (k) => isAcc ? k === "pay" || k === "lists" : isAdmin || !["approve", "lists", "fin", "req", "remind", "pay", "loans", "hr"].includes(k);
+        const allowed = (k) => isAcc ? k === "pay" || k === "lists" : isAdmin || !["approve", "lists", "fin", "req", "remind", "pay", "loans", "recon", "hr"].includes(k);
         const loansPending = loans.filter((l) => l.status === "pending").length;
         const TABS = {
           form: "Нове переведення", journal: "Журнал",
           approve: "Погодження" + (myPending.length ? " · " + myPending.length : ""),
           req: "Заявки" + (newRequests.length ? " · " + newRequests.length : ""),
           loans: "Факт по переведеннях" + (loansPending ? " · " + loansPending : ""),
+          recon: "Звірка PM",
           teams: "Табель команд", remind: "Нагадування", fin: "Місяць · фін. облік", report: "Звіт по місяцях",
           snap: "Зріз на дату", hr: "HR-метрики", lists: "Довідник", pay: "Відомості ЗП",
         };
         const pfOpen = ((pf && pf.changes) || []).filter((x) => x.status === "new").length;
         const SECTIONS = [
-          { k: "moves", label: "Переведення", icon: "moves", tabs: ["form", "journal", "approve", "req", "loans"], badge: (isAdmin ? myPending.length + newRequests.length + loansPending : 0) },
+          { k: "moves", label: "Переведення", icon: "moves", tabs: ["form", "journal", "approve", "req", "loans", "recon"], badge: (isAdmin ? myPending.length + newRequests.length + loansPending : 0) },
           { k: "sheet", label: "Табель", icon: "sheet", tabs: ["teams", "remind", "fin", "report"] },
           { k: "pay", label: "Відомості ЗП", icon: "pay", tabs: ["pay"] },
           { k: "snap", label: "Зріз на дату", icon: "snap", tabs: ["snap"] },
@@ -2738,6 +2739,10 @@ export default function TransferDesk() {
         {/* ── ПОГОДЖЕННЯ ── */}
         {tab === "loans" && isAdmin && (
           <LoansAdmin token={tokenRef.current} onChanged={() => pullServer().catch(() => {})} setToast={setToast} />
+        )}
+
+        {tab === "recon" && isAdmin && (
+          <ReconAdmin token={tokenRef.current} setToast={setToast} onApiError={onApiError} />
         )}
 
         {tab === "approve" && isAdmin && (() => {
