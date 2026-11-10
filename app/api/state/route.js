@@ -9,7 +9,7 @@ import { asAlloc } from "../../../lib/alloc";
 
 export const dynamic = "force-dynamic";
 
-const EMPTY = { employees: [], projects: [], partners: [], reasons: [], transfers: [], admins: [], log: [], deleted: {}, pms: {}, codes: {}, projectMeta: {}, teams: [], entries: [], fin: [], fpv: [], settings: { approvalMode: "give" } };
+const EMPTY = { employees: [], projects: [], partners: [], reasons: [], transfers: [], admins: [], log: [], deleted: {}, pms: {}, codes: {}, projectMeta: {}, teams: [], entries: [], fin: [], fpv: [], settings: { approvalMode: "give" }, kv: {} };
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const byId = (list) => new Map((list || []).map((x) => [x.id, x]));
 const newer = (a, b) => (a && a.updatedAt || "") > (b && b.updatedAt || "");
@@ -98,6 +98,7 @@ function guardHrd(stored, inc, me) {
   inc.codes = stored.codes || {};
   inc.projectMeta = stored.projectMeta || {};
   inc.settings = stored.settings || {};
+  inc.kv = stored.kv || {};
   inc.admins = stored.admins || [];
   inc.fin = stored.fin || [];
   inc.fpv = stored.fpv || [];
@@ -218,6 +219,8 @@ function guardAccountant(stored, inc, me) {
   const keep = { ...stored, employees, transfers };
   keep.fpv = inc.fpv || stored.fpv || []; // довідник FPV бухгалтер веде повністю (злиття нижче лишить новіші правки)
   keep.settings = { ...(stored.settings || {}), pay: (inc.settings && inc.settings.pay) || (stored.settings || {}).pay };
+  // Правку налаштувань відомостей бухгалтером позначаємо часом, щоб її не затерла старіша копія адміністратора.
+  if (JSON.stringify(keep.settings.pay) !== JSON.stringify((stored.settings || {}).pay)) keep.kv = { ...(stored.kv || {}), "settings:pay": nowISO() };
   const ownLog = (inc.log || []).filter((l) => sameName(l.who, me.name));
   keep.log = [...ownLog, ...(stored.log || [])];
   Object.keys(inc).forEach((k) => delete inc[k]);

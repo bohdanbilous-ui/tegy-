@@ -439,6 +439,9 @@ export default function TransferDesk() {
   const [log, setLog] = useState([]);
   const [pms, setPms] = useState({});
   const [codes, setCodes] = useState({});
+  // kv: час останньої правки кожного ключа в pms / codes / settings («pms:Назва»); дозволяє зливати їх по ключах, а не «локальне завжди виграє».
+  const [kv, setKv] = useState({});
+  const kvPrev = useRef(null);
   const [projectMeta, setProjectMeta] = useState({});
   const [teams, setTeams] = useState(SEED_TEAMS);
   const [entries, setEntries] = useState([]);
@@ -534,10 +537,13 @@ export default function TransferDesk() {
   const fileRef = useRef(null);
 
   /* ── синхронізація з сервером ── */
-  const snap = () => ({ employees, projects, partners, reasons, transfers, admins, log, deleted, pms, codes, projectMeta, teams, entries, fin, fpv, settings });
+  const snap = () => ({ employees, projects, partners, reasons, transfers, admins, log, deleted, pms, codes, projectMeta, teams, entries, fin, fpv, settings, kv });
   stateRef.current = snap();
 
   function applyState(d) {
+    // Позначки часу правок PM, кодів і налаштувань: що прийшло з сервера, правкою не вважається.
+    kvPrev.current = { pms: d.pms || {}, codes: d.codes || {}, settings: { approvalMode: "give", ...(d.settings || {}) } };
+    setKv(d.kv || {});
     setEmployees(d.employees || []);
     setProjects(d.projects || []);
     setPartners(d.partners || []);
@@ -630,7 +636,20 @@ export default function TransferDesk() {
     if (cur === lastSync.current) return;
     const id = setTimeout(() => syncNow(false), 700);
     return () => clearTimeout(id);
-  }, [employees, projects, partners, reasons, transfers, admins, log, deleted, pms, codes, projectMeta, teams, entries, fin, fpv, settings, ready, user]);
+  }, [employees, projects, partners, reasons, transfers, admins, log, deleted, pms, codes, projectMeta, teams, entries, fin, fpv, settings, kv, ready, user]);
+
+  useEffect(() => {
+    const cur = { pms, codes, settings };
+    const prev = kvPrev.current;
+    kvPrev.current = cur;
+    if (!prev) return;
+    const ts = nowISO(), upd = {};
+    ["pms", "codes", "settings"].forEach((name) => {
+      const a = cur[name] || {}, b = prev[name] || {};
+      new Set([...Object.keys(a), ...Object.keys(b)]).forEach((k) => { if (JSON.stringify(a[k]) !== JSON.stringify(b[k])) upd[name + ":" + k] = ts; });
+    });
+    if (Object.keys(upd).length) setKv((p) => ({ ...p, ...upd }));
+  }, [pms, codes, settings]);
 
   useEffect(() => {
     if (!ready || !deskUser(user)) return;
@@ -1238,11 +1257,16 @@ export default function TransferDesk() {
 
   const report = useMemo(() => {
     const live = transfers.filter((t) => !t.cancelled && t.effectiveDate.slice(0, 4) === year);
+    // «Білоус Богдан» і «Богдан Білоус» — одна людина: зводимо за набором слів, показуємо найчастіше написання.
+    const ppKey = (n) => String(n || "").toLowerCase().split(/\s+/).filter(Boolean).sort().join(" ");
+    const ppVariants = new Map();
+    transfers.forEach((t) => { if (!t.partner) return; const k = ppKey(t.partner), m = ppVariants.get(k) || new Map(); m.set(t.partner, (m.get(t.partner) || 0) + 1); ppVariants.set(k, m); });
+    const ppName = (n) => { if (!n) return "не вказано"; const m = ppVariants.get(ppKey(n)); return m ? [...m].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "uk"))[0][0] : n; };
     const months = MONTHS.map((_, i) => {
       const key = year + "-" + pad(i + 1);
       const items = live.filter((t) => monthKey(t.effectiveDate) === key).sort((a, b) => a.effectiveDate.localeCompare(b.effectiveDate));
       const byPP = {}; let splits = 0;
-      items.forEach((t) => { const k = t.partner || "не вказано"; byPP[k] = (byPP[k] || 0) + 1; if (asAlloc(t.to).length > 1) splits++; });
+      items.forEach((t) => { const k = ppName(t.partner); byPP[k] = (byPP[k] || 0) + 1; if (asAlloc(t.to).length > 1) splits++; });
       return { key, label: MONTHS[i], items, byPP, splits, count: items.length };
     });
     const moves = {}, heads = {}, ppTotals = {}, reasons = {};
@@ -1254,7 +1278,7 @@ export default function TransferDesk() {
         moves[p] = moves[p] || { in: 0, out: 0 };
         if (d > 0) moves[p].in += d / 100; else if (d < 0) moves[p].out += -d / 100;
       });
-      const k = t.partner || "не вказано"; ppTotals[k] = (ppTotals[k] || 0) + 1;
+      const k = ppName(t.partner); ppTotals[k] = (ppTotals[k] || 0) + 1;
       const r = t.reason || "не вказано"; reasons[r] = (reasons[r] || 0) + 1;
     });
     employees.forEach((e) => allocAt(e, transfers, today).forEach((x) => {
