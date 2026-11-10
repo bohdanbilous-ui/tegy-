@@ -3186,7 +3186,7 @@ export default function TransferDesk() {
           <PayDesk employees={employees} setEmployees={setEmployees} fpv={fpv} setFpv={setFpv}
             settings={settings} setSettings={setSettings} codes={codes} codeList={CODES}
             spanCalculator={paySpanCalc} toParts={payParts} token={tokenRef.current}
-            setToast={setToast} pushLog={pushLog} stamp={nowISO} today={today} openCard={isAdmin || isAcc ? setCardId : null}
+            setToast={setToast} pushLog={pushLog} stamp={nowISO} today={today} openCard={isAdmin || isAcc ? setCardId : null} userName={user.name}
             onOpenBook={(b) => { setTab("lists"); setBook(b); }} />
         )}
 

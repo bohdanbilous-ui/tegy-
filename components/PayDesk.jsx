@@ -60,7 +60,7 @@ function fillTpl(tpl, v) {
 }
 
 export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings, setSettings, codes, codeList, spanCalculator, toParts,
-  token, setToast, pushLog, stamp, today, openCard, canEdit = true, mode = "pay", onOpenBook }) {
+  token, setToast, pushLog, stamp, today, openCard, userName = "", canEdit = true, mode = "pay", onOpenBook }) {
   // mode: "pay" — відомості; "legal" — довідник юросіб; "fpv" — довідник FPV (обидва живуть у розділі «Довідник»).
   // canEdit=false — лише перегляд (зараз і адміністратор, і бухгалтер мають повні права у відомостях).
   const pay = settings.pay || {};
@@ -79,6 +79,8 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
   const [showTpl, setShowTpl] = useState(false);
   const [sel, setSel] = useState({});
   const [showAdv, setShowAdv] = useState(false);
+  const [cmp, setCmp] = useState("off");
+  const [showHist, setShowHist] = useState(false);
   const [sent, setSent] = useState(null);
   const [imp, setImp] = useState(null);
   const [newFpv, setNewFpv] = useState("");
@@ -98,12 +100,13 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
     callPay("GET").then((d) => { setInn(d.inn || {}); setSheetReady(!!d.ready); }).catch(() => {});
   }, [token]);
 
-  const spanOf = (which) => {
-    const mk = per.y + "-" + pad(per.m), end = mk + "-" + pad(lastDay(per.y, per.m));
+  const spanOf = (which, pp = per) => {
+    const mk = pp.y + "-" + pad(pp.m), end = mk + "-" + pad(lastDay(pp.y, pp.m));
     if (which === "month") return { from: mk + "-01", to: end, half: 0 };
-    return per.half === 1 ? { from: mk + "-01", to: mk + "-15", half: 1 } : { from: mk + "-16", to: end, half: 2 };
+    return pp.half === 1 ? { from: mk + "-01", to: mk + "-15", half: 1 } : { from: mk + "-16", to: end, half: 2 };
   };
-  const spans = { staff: spanOf(staffSpan), gig: spanOf(gigSpan) };
+  const spansFor = (pp) => ({ staff: spanOf(staffSpan, pp), gig: spanOf(gigSpan, pp) });
+  const spans = spansFor(per);
   const knownCodes = useMemo(() => new Set([...(codeList || []), ...Object.values(codes || {}).filter(Boolean)]), [codeList, codes]);
   // Довідник юросіб: з нього в кожному рядку обирається юрособа.
   const legalBook = useMemo(() => (pay.legals || []).map((x) => (typeof x === "string" ? { name: x } : { name: x.name || "" })).filter((x) => x.name),
@@ -112,15 +115,16 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
   const setLegalBook = (list) => setPay({ legals: list });
 
   /* ─── розрахунок рядків відомостей ─── */
-  const rows = useMemo(() => {
-    const monthSpan = spanOf("month");
+  const buildRows = (pp) => {
+    const spans = spansFor(pp);
+    const monthSpan = spanOf("month", pp);
     const calcs = { staff: spanCalculator(spans.staff.from, spans.staff.to), gig: spanCalculator(spans.gig.from, spans.gig.to),
       month: spanCalculator(monthSpan.from, monthSpan.to) };
     const list = [];
     employees.forEach((e) => {
       const type = e.payType || e.fileType || "";
       // Парттайм платимо раз на місяць: у відомості другої половини, з тегом за весь місяць.
-      if (e.partTime && per.half === 1) return;
+      if (e.partTime && pp.half === 1) return;
       const sp = e.partTime ? monthSpan : spans[TYPE_KEY[type] || "staff"];
       if (e.hiredOn && e.hiredOn > sp.to) return;
       if (e.leftOn && e.leftOn < sp.from) return;
@@ -135,7 +139,7 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
         typeAuto: e.fileType || "",
         legal: e.payLegal || "",
         like: e.payLike || "", off: !!e.payOff, fixed: e.payFixed || "", fileFixed: e.fileFixed || "",
-        parts, source, notes, sp,
+        parts, source, notes, sp, pt: !!e.partTime,
       });
     });
     (fpv || []).filter((f) => f.active !== false).forEach((f) => {
@@ -170,10 +174,12 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
       r.tag = r.tagBody ? "{prd:" + r.tagBody + "}" : "";
       r.problems = prob;
       r.key = (r.legal || "без юрособи") + " · " + (r.type || "без типу");
-      r.purpose = r.tag ? fillTpl(tpl[TYPE_KEY[r.type] || "staff"], { half: r.sp.half, m: per.m, y: per.y, name: r.name, tag: r.tag }) : "";
+      r.purpose = r.tag ? fillTpl(tpl[TYPE_KEY[r.type] || "staff"], { half: r.sp.half, m: pp.m, y: pp.y, name: r.name, tag: r.tag }) : "";
     });
     return list.sort((a, b) => a.name.localeCompare(b.name, "uk"));
-  }, [employees, fpv, per.y, per.m, per.half, staffSpan, gigSpan, codes, inn, knownCodes, tpl.staff, tpl.gig, spanCalculator, toParts, legalBook]);
+  };
+  const rowsDeps = [employees, fpv, per.y, per.m, per.half, staffSpan, gigSpan, codes, inn, knownCodes, tpl.staff, tpl.gig, spanCalculator, toParts, legalBook];
+  const rows = useMemo(() => buildRows(per), rowsDeps);
 
   const included = rows.filter((r) => !r.off);
   const statements = useMemo(() => {
@@ -196,6 +202,33 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
     && (!q || low(r.name).includes(q) || low(r.short).includes(q) || low(r.tagBody).includes(q)));
   const badCount = included.filter((r) => r.problems.length).length;
   const perLabel = MONTHS[per.m - 1] + " " + per.y;
+  const perKey = per.y + "-" + pad(per.m) + "-H" + per.half;
+  // Відбиток відомості: якщо після затвердження щось змінилось (тег, тип, юрособа, склад) — затвердження застаріло.
+  const fingerprint = useMemo(() => {
+    const str = included.map((r) => r.id + "|" + r.type + "|" + r.legal + "|" + r.tag).sort().join("\n");
+    let h = 5381; for (let i = 0; i < str.length; i++) h = ((h * 33) ^ str.charCodeAt(i)) >>> 0;
+    return String(h);
+  }, [included]);
+  const approval = (pay.approvals || {})[perKey];
+  const stale = !!approval && approval.fp !== fingerprint;
+  const fmtAt = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : pad(d.getDate()) + "." + pad(d.getMonth() + 1) + " " + pad(d.getHours()) + ":" + pad(d.getMinutes()); };
+  const prevPer = useMemo(() => {
+    if (cmp === "lastMonth") return per.m === 1 ? { y: per.y - 1, m: 12, half: per.half } : { ...per, m: per.m - 1 };
+    if (per.half === 2) return { ...per, half: 1 };
+    return per.m === 1 ? { y: per.y - 1, m: 12, half: 2 } : { ...per, m: per.m - 1, half: 2 };
+  }, [per, cmp]);
+  const prevLabel = MONTHS[prevPer.m - 1].toLowerCase() + " " + prevPer.y + (cmp === "lastMonth" ? "" : prevPer.half === 1 ? ", 01–15" : ", 16–" + lastDay(prevPer.y, prevPer.m));
+  const diff = useMemo(() => {
+    if (cmp === "off") return null;
+    const prev = new Map(buildRows(prevPer).filter((r) => !r.off).map((r) => [r.id, r]));
+    const cur = included;
+    const curIds = new Set(cur.map((r) => r.id));
+    const added = cur.filter((r) => !prev.has(r.id) && !r.pt);
+    const gone = [...prev.values()].filter((r) => !curIds.has(r.id) && !r.pt);
+    const changed = cur.filter((r) => prev.has(r.id) && (prev.get(r.id).tag !== r.tag || prev.get(r.id).legal !== r.legal || prev.get(r.id).type !== r.type))
+      .map((r) => ({ r, was: prev.get(r.id) }));
+    return { added, gone, changed };
+  }, [cmp, prevPer, included, ...rowsDeps]);
   const spanText = (w) => (w === "month" ? "місяць" : per.half === 1 ? "01–15" : "16–" + lastDay(per.y, per.m));
 
   /* ─── правки ─── */
@@ -204,6 +237,16 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
   const edit = (r, patch) => (r.kind === "fpv" ? setF(r.id, patch) : setEmp(r.id, patch));
   const selRows = rows.filter((r) => sel[r.id]);
   const bulk = (patchOf) => { selRows.forEach((r) => edit(r, patchOf(r))); setToast("Змінено: " + selRows.length + " " + plural(selRows.length, "рядок", "рядки", "рядків") + "."); setSel({}); };
+  const approve = () => {
+    if (badCount || !included.length) return;
+    setPay({ approvals: { ...(pay.approvals || {}), [perKey]: { by: userName || "—", at: stamp(), fp: fingerprint, count: included.length } } });
+    pushLog("затвердив відомості ЗП", perLabel + " · " + (per.half === 1 ? "01–15" : "16–" + lastDay(per.y, per.m)) + " · " + included.length + " людей");
+  };
+  const unapprove = () => {
+    const next = { ...(pay.approvals || {}) }; delete next[perKey];
+    setPay({ approvals: next });
+    pushLog("зняв затвердження відомостей ЗП", perLabel + " · " + (per.half === 1 ? "01–15" : "16–" + lastDay(per.y, per.m)));
+  };
   const likeId = (name) => { const n = low(name); if (!n) return ""; const r = rows.find((x) => low(x.name) === n || low(x.short) === n); return r ? r.id : null; };
 
   function askFio(r) {
@@ -312,6 +355,7 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
     const msg = "Записати в Google Таблицю " + statements.length + " " + plural(statements.length, "відомість", "відомості", "відомостей") + " за " + perLabel +
       " (" + included.length + " " + plural(included.length, "людина", "людини", "людей") + ")?" +
       (badCount ? "\n\nУ " + badCount + " " + plural(badCount, "рядку", "рядках", "рядках") + " є проблеми — вони підуть зі статусом, щоб їх було видно в таблиці." : "") +
+      (approval && !stale ? "" : "\n\n⚠ Відомості " + (stale ? "змінились після затвердження." : "ще не затверджені.")) +
       "\n\nВкладки цих відомостей у таблиці буде повністю перезаписано.";
     if (!window.confirm(msg)) return;
     // Форма — як «Результат ШТАТ / ГІГ» у таблиці «Теги ЗП»: ті самі 7 колонок, окремо на кожну юрособу.
@@ -333,6 +377,7 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
     try {
       const d = await callPay("POST", { action: "send", period: perLabel + " · Штат: " + spanText(staffSpan) + " · Гіг: " + spanText(gigSpan), tabs });
       setSent({ at: new Date().toISOString(), ...d, tabs: statements.length, count: included.length, bad: badCount });
+      setPay({ sends: [{ at: stamp(), by: userName || "—", key: perKey, label: perLabel + " · " + (per.half === 1 ? "01–15" : "16–" + lastDay(per.y, per.m)), tabs: statements.length, count: included.length, bad: badCount, approved: !!approval && !stale, url: d.url || "" }, ...(pay.sends || [])].slice(0, 40) });
       setToast("Записано: " + statements.length + " " + plural(statements.length, "відомість", "відомості", "відомостей") + (d.noInn ? " · без ІПН: " + d.noInn : "") + ".");
       pushLog("вивантажив відомості ЗП у Google Таблицю", perLabel + " · " + statements.length + " відомостей, " + included.length + " людей");
     } catch (e) { setToast("Не вийшло записати: " + e.message); }
@@ -426,7 +471,69 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
               {x.l} · {x.n}
             </button>
           ))}
+          <span style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            {approval ? (
+              <>
+                <span style={{ fontSize: 12.5, color: stale ? C.warn : "#15803D", fontWeight: 600 }}>
+                  {stale ? "Затверджено, але далі змінилось" : "✓ Затверджено"} · {approval.by}, {fmtAt(approval.at)}
+                </span>
+                {stale && canEdit && <button className="ghost" disabled={!!badCount} onClick={approve}>Затвердити знову</button>}
+                {canEdit && <button className="link" style={{ fontSize: 12.5 }} onClick={unapprove}>зняти</button>}
+              </>
+            ) : canEdit && (
+              <button className="ghost" disabled={!!badCount || !included.length} onClick={approve}
+                title={badCount ? "Спершу виправте проблеми" : "Зафіксувати, що відомості перевірено"}>Затвердити відомості</button>
+            )}
+          </span>
         </div>
+        <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", marginTop: 8, fontSize: 12.5 }}>
+          <label style={{ color: C.muted }}>Порівняти з{" "}
+            <select value={cmp} onChange={(e) => setCmp(e.target.value)} aria-label="Порівняння з попереднім періодом" style={{ width: "auto", padding: "4px 8px" }}>
+              <option value="off">— не порівнювати</option>
+              <option value="prev">попередньою відомістю</option>
+              <option value="lastMonth">тією ж половиною минулого місяця</option>
+            </select>
+          </label>
+          <button className="link" style={{ color: C.muted, textDecoration: "none" }} aria-expanded={showHist} onClick={() => setShowHist((v) => !v)}>
+            Історія вивантажень{(pay.sends || []).length ? " · " + pay.sends.length : ""} {showHist ? "▴" : "▾"}
+          </button>
+        </div>
+        {diff && (
+          <div style={{ marginTop: 10, background: "#F8FAFC", border: "1px solid " + C.lineSoft, borderRadius: 8, padding: "10px 14px", fontSize: 13 }}>
+            <div style={{ color: C.ink2, fontWeight: 600 }}>
+              Проти «{prevLabel}»: нових {diff.added.length}, зникли {diff.gone.length}, змінились {diff.changed.length}
+              {!diff.added.length && !diff.gone.length && !diff.changed.length && " — без змін"}
+            </div>
+            {[["Нові", diff.added.map((r) => r.name)], ["Зникли", diff.gone.map((r) => r.name)],
+              ["Змінились", diff.changed.map(({ r, was }) => r.name + ": " + (was.tag || "—") + " → " + (r.tag || "—") + (was.legal !== r.legal ? " · юрособа " + (was.legal || "—") + " → " + (r.legal || "—") : "") + (was.type !== r.type ? " · " + (was.type || "—") + " → " + (r.type || "—") : ""))]]
+              .filter(([, l]) => l.length).map(([t, l]) => (
+                <details key={t} style={{ marginTop: 6 }}>
+                  <summary style={{ cursor: "pointer", color: C.ink2 }}>{t}: {l.length}</summary>
+                  <ul style={{ margin: "6px 0 0", paddingLeft: 18, color: C.muted, wordBreak: "break-word" }}>{l.map((x, i) => <li key={i}>{x}</li>)}</ul>
+                </details>
+              ))}
+            <div style={{ ...small, marginTop: 6 }}>Парттайм у порівняння не потрапляє: він іде лише у відомості другої половини.</div>
+          </div>
+        )}
+        {showHist && (
+          <div style={{ marginTop: 10, fontSize: 13 }}>
+            {(pay.sends || []).length === 0 ? <span style={{ color: C.muted }}>Ще нічого не вивантажували.</span> : (
+              <table>
+                <thead><tr><th>Коли</th><th>Хто</th><th>Період</th><th style={{ textAlign: "right" }}>Відомостей</th><th style={{ textAlign: "right" }}>Людей</th><th>Стан</th></tr></thead>
+                <tbody>
+                  {pay.sends.slice(0, 10).map((x, i) => (
+                    <tr key={i}>
+                      <td className="num">{fmtAt(x.at)}</td><td>{x.by}</td>
+                      <td>{x.url ? <a href={x.url} target="_blank" rel="noreferrer" style={{ color: C.signal }}>{x.label}</a> : x.label}</td>
+                      <td className="num" style={{ textAlign: "right" }}>{x.tabs}</td><td className="num" style={{ textAlign: "right" }}>{x.count}</td>
+                      <td style={{ color: x.bad ? C.warn : x.approved ? "#15803D" : C.muted }}>{x.bad ? "з проблемами: " + x.bad : x.approved ? "затверджено" : "без затвердження"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
       </section>
 
       <section style={{ ...card, padding: "14px 20px" }}>
