@@ -35,6 +35,12 @@ const shift = (k, n) => {
   const y = Math.floor(idx / 24); idx -= y * 24;
   return keyOf({ y, m: Math.floor(idx / 2) + 1, half: (idx % 2) + 1 });
 };
+const addDaysISO = (d, n) => { const x = new Date(d + "T00:00:00Z"); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+const daysBetween = (a, b) => Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 86400000);
+// Факт за половину місяця потрібен не пізніше ніж через 3 дні після її кінця: далі за ним іде відомість ЗП.
+const FACT_GRACE_DAYS = 3;
+const periodEnd = (k) => { const p = perOf(k); return p.y + "-" + pad(p.m) + "-" + pad(p.half === 1 ? 15 : lastDay(p.y, p.m)); };
+const dueOf = (k) => addDaysISO(periodEnd(k), FACT_GRACE_DAYS);
 const allocText = (a) => (!a || !a.length ? "—" : a.map((x) => (x.percent === 100 ? x.project : x.project + " " + Number(Number(x.percent).toFixed(2)) + "%")).join(" + "));
 const plural = (n, a, b, c) => { const m = n % 100; if (m > 10 && m < 20) return c; const k = n % 10; return k === 1 ? a : k > 1 && k < 5 ? b : c; };
 
@@ -105,6 +111,7 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
   const incomingReqs = incomingPending.flatMap((x) => (x.approvals || []).filter((a) => a.role === "give" && mine.has(a.project) && a.status === "pending")
     .map((a) => ({ action: "req-decide", requestId: x.id, project: a.project, ok: true, comment: "" })));
   const confirmReqs = toConfirm.map((l) => ({ action: "loan-decide", id: l.id, ok: true, comment: "" }));
+  const plannedReqs = data ? data.todo.map((x) => ({ action: "loan-save", transferId: x.transferId, project: x.project, periodKey: x.periodKey, hours: 0, asPlanned: true, comment: "" })) : [];
   const bulk = (reqs, what, doneText) => {
     if (!reqs.length) return;
     if (!window.confirm(what + ": " + reqs.length + ". Підтвердити все одразу? Заперечити можна лише окремо, з коментарем.")) return;
@@ -146,6 +153,7 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
     ["loans", "Факт по переведеннях", data ? data.todo.length : 0],
     ["confirm", "Підтвердити години", toConfirm.length],
     ["request", "Заявка на переведення", 0],
+    ["history", "Історія рішень", 0],
   ];
 
   return (
@@ -191,14 +199,17 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
         )}
 
         {data && tab === "home" && (
-          <Home data={data} card={card} go={setTab} isAdmin={isAdmin}
+          <Home data={data} card={card} go={setTab} isAdmin={isAdmin} busy={busy} act={act}
+            onPlannedAll={() => bulk(plannedReqs, "Внести «як заплановано»", "Внесено")}
+            overdue={{ facts: data.todo.filter((x) => dueOf(x.periodKey) < data.today).length, approve: pendingApprovals.filter((t) => t.effectiveDate < data.today).length }}
             counts={{ approve: pendingApprovals.length, incoming: incomingPending.length, facts: data.todo.length, confirm: toConfirm.length }} />
         )}
         {data && tab === "approve" && <Approvals data={data} mine={mine} notes={notes} setNotes={setNotes} busy={busy} act={act} card={card}
           onApproveAll={() => bulk(approveReqs, "Погодити переведень", "Погоджено")} onApproveAllReq={() => bulk(incomingReqs, "Погодити запитів на ваших людей", "Погоджено")}
           nApprove={approveReqs.length} nReq={incomingReqs.length} />}
         {data && tab === "people" && <People data={data} mine={mine} q={q} setQ={setQ} card={card} />}
-        {data && tab === "loans" && <Facts data={data} mine={mine} isAdmin={isAdmin} busy={busy} act={act} card={card} />}
+        {data && tab === "loans" && <Facts data={data} mine={mine} isAdmin={isAdmin} busy={busy} act={act} card={card} onPlannedAll={() => bulk(plannedReqs, "Внести «як заплановано»", "Внесено")} />}
+        {data && tab === "history" && <History data={data} card={card} />}
         {data && tab === "confirm" && <Confirm data={data} mine={mine} isAdmin={isAdmin} list={toConfirm} notes={notes} setNotes={setNotes} busy={busy} act={act} card={card}
           onConfirmAll={() => bulk(confirmReqs, "Підтвердити записів годин", "Підтверджено")} />}
         {data && tab === "request" && <Request data={data} busy={busy} act={act} card={card} addBtn={addBtn} label={label} />}
@@ -213,16 +224,54 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
   );
 }
 
+/* ── заступник: на час відсутності колега погоджує й вносить факт від імені моїх проєктів ── */
+function Deputy({ data, busy, act }) {
+  const mineDep = data.deputy.mine;
+  const [who, setWho] = useState("");
+  const [from, setFrom] = useState(data.today);
+  const [to, setTo] = useState(addDaysISO(data.today, 7));
+  return (
+    <div style={{ display: "grid", gap: 8 }}>
+      {mineDep ? (
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", fontSize: 13.5 }}>
+          <span>Ваш заступник: <b>{mineDep.deputy}</b>, {fmt(mineDep.from)} — {fmt(mineDep.to)}</span>
+          <button className="ghost" disabled={busy} onClick={() => act({ action: "deputy-clear" }, "Заступника знято")}>Зняти</button>
+        </div>
+      ) : (
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+          <label style={{ fontSize: 12.5, color: C.muted }}>Заступник
+            <select value={who} onChange={(e) => setWho(e.target.value)} style={{ display: "block", minWidth: 200 }} aria-label="Заступник">
+              <option value="">— оберіть PM —</option>
+              {data.deputy.candidates.map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </label>
+          <label style={{ fontSize: 12.5, color: C.muted }}>З <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} style={{ display: "block" }} /></label>
+          <label style={{ fontSize: 12.5, color: C.muted }}>До <input type="date" value={to} onChange={(e) => setTo(e.target.value)} style={{ display: "block" }} /></label>
+          <button className="ghost" disabled={busy || !who} onClick={() => act({ action: "deputy-set", deputy: who, from, to }, "Заступника призначено")}>Призначити</button>
+        </div>
+      )}
+      <div style={{ fontSize: 12.5, color: C.muted }}>Поки заступництво діє, колега бачить ваші завдання, погоджує й вносить години від імені ваших проєктів. Кожна дія підписана його іменем.</div>
+    </div>
+  );
+}
+
 /* ── головна: що робити зараз ── */
-function Home({ data, card, go, counts, isAdmin }) {
+function Home({ data, card, go, counts, overdue, isAdmin, busy, act, onPlannedAll }) {
   const items = [
-    ["approve", counts.approve, "Переведення чекають на ваше погодження", "Погоджуєте вже доконане переведення: ваша людина йде або приходить до проєкту."],
-    ["approve", counts.incoming, "Запити на людей з ваших проєктів", "Інший PM просить вашу людину. Ваше слово бачить адміністратор."],
-    ["loans", counts.facts, "Внести факт по годинах", "Людина тимчасово або частково працює у вашому проєкті: впишіть, скільки годин вона відпрацювала."],
-    ["confirm", counts.confirm, "Підтвердити години колег", "Колега вніс години вашої людини в його проєкті. Підтвердження впливає на теги."],
+    ["approve", counts.approve, "Переведення чекають на ваше погодження", "Погоджуєте вже доконане переведення: ваша людина йде або приходить до проєкту.", overdue.approve ? overdue.approve + " уже діють" : ""],
+    ["approve", counts.incoming, "Запити на людей з ваших проєктів", "Інший PM просить вашу людину. Ваше слово бачить адміністратор.", ""],
+    ["loans", counts.facts, "Внести факт по годинах", "Людина тимчасово або частково працює у вашому проєкті: впишіть, скільки годин вона відпрацювала.", overdue.facts ? overdue.facts + " прострочено" : ""],
+    ["confirm", counts.confirm, "Підтвердити години колег", "Колега вніс години вашої людини в його проєкті. Підтвердження впливає на теги.", ""],
   ];
   const open = items.filter((x) => x[1] > 0);
+  const soon = (data.upcoming || []).slice(0, 4);
   return (
+    <>
+    {data.deputy.covering.length > 0 && (
+      <section style={{ ...card, padding: "12px 20px", background: C.planSoft, borderColor: "#C7D2FE" }}>
+        Ви заступаєте {data.deputy.covering.map((d) => d.pm + " до " + fmt(d.to)).join("; ")}: їхні проєкти додані до ваших.
+      </section>
+    )}
     <section style={{ ...card, padding: 20, display: "grid", gap: 14 }}>
       <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
         <h2 style={{ margin: 0, fontSize: 17 }}>{open.length ? "Що потрібно зробити" : "Усе зроблено ✓"}</h2>
@@ -230,27 +279,63 @@ function Home({ data, card, go, counts, isAdmin }) {
       </div>
       {open.length === 0 && <p style={{ margin: 0, color: C.muted }}>Зараз від вас нічого не потрібно. Нові завдання зʼявляться тут і прийдуть у Slack.</p>}
       <div style={{ display: "grid", gap: 10 }}>
-        {open.map(([tab, n, title, hint], i) => (
-          <button key={i} onClick={() => go(tab)} style={{ cursor: "pointer", textAlign: "left", display: "flex", gap: 14, alignItems: "center", background: C.warnSoft, border: "1px solid #FED7AA", borderRadius: 10, padding: "14px 16px" }}>
-            <span className="num" style={{ fontSize: 26, fontWeight: 700, color: C.warn, minWidth: 36 }}>{n}</span>
+        {open.map(([tab, n, title, hint, late], i) => (
+          <button key={i} onClick={() => go(tab)} style={{ cursor: "pointer", textAlign: "left", display: "flex", gap: 14, alignItems: "center", background: late ? C.stopSoft : C.warnSoft, border: "1px solid " + (late ? "#FECACA" : "#FED7AA"), borderRadius: 10, padding: "14px 16px" }}>
+            <span className="num" style={{ fontSize: 26, fontWeight: 700, color: late ? C.stop : C.warn, minWidth: 36 }}>{n}</span>
             <span style={{ flex: 1 }}>
-              <span style={{ display: "block", fontWeight: 600 }}>{title}</span>
+              <span style={{ display: "block", fontWeight: 600 }}>{title}{late && <span style={{ color: C.stop, fontWeight: 600, fontSize: 12.5 }}> · {late}</span>}</span>
               <span style={{ display: "block", color: C.ink2, fontSize: 12.5, marginTop: 2 }}>{hint}</span>
             </span>
-            <span style={{ color: C.warn, fontWeight: 600 }}>Відкрити →</span>
+            <span style={{ color: late ? C.stop : C.warn, fontWeight: 600 }}>Відкрити →</span>
           </button>
         ))}
       </div>
+      {counts.facts > 0 && (
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <button className="ghost" disabled={busy} onClick={onPlannedAll}>Внести «як заплановано» для всіх · {counts.facts}</button>
+          <span style={{ fontSize: 12.5, color: C.muted }}>Якщо люди відпрацювали стільки, скільки передбачає переведення. Винятки впишіть окремо у вкладці «Факт».</span>
+        </div>
+      )}
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
         <button className="link" onClick={() => go("people")}>Люди ваших проєктів</button>
         <button className="link" onClick={() => go("request")}>Подати заявку на переведення</button>
+        <button className="link" onClick={() => go("history")}>Історія рішень</button>
       </div>
       <Info>
         PM — людина, вписана в поле «PM, який погоджує» проєкту. Ви: 1) погоджуєте переведення людей ваших проєктів; 2) вносите години по тимчасових і часткових переведеннях,
         які приймає ваш проєкт; 3) підтверджуєте години колег по ваших людях; 4) подаєте заявку, якщо вам потрібна людина з іншого проєкту.
         Переведення діє з дати незалежно від погодження — ви підтверджуєте вже доконане. Масові кнопки «Погодити всі» є у відповідних розділах, а заперечити можна лише окремо, з коментарем.
+        Факт за половину місяця треба внести до {FACT_GRACE_DAYS}-го дня після її завершення, бо за ним іде відомість ЗП.
       </Info>
     </section>
+    {soon.length > 0 && (
+      <section style={{ ...card, padding: "14px 20px", display: "grid", gap: 6 }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "baseline" }}>
+          <h3 style={{ margin: 0, fontSize: 15 }}>Найближчі зміни на ваших проєктах</h3>
+          <button className="link" style={{ marginLeft: "auto" }} onClick={() => go("people")}>усі</button>
+        </div>
+        {soon.map((u, i) => <UpcomingLine key={i} u={u} today={data.today} />)}
+      </section>
+    )}
+    <section style={{ ...card, padding: "14px 20px" }}>
+      <h3 style={{ margin: "0 0 8px", fontSize: 15 }}>Заступник на час відсутності</h3>
+      <Deputy data={data} busy={busy} act={act} />
+    </section>
+    </>
+  );
+}
+
+const UPC = { join: ["приходить", C.signal], leave: ["іде", C.stop], back: ["повертається", C.signal], end: ["тимчасово закінчується, йде", C.warn] };
+function UpcomingLine({ u, today }) {
+  const [t, color] = UPC[u.kind];
+  const d = daysBetween(today, u.date);
+  return (
+    <div style={{ display: "flex", gap: 10, fontSize: 13.5, flexWrap: "wrap" }}>
+      <span className="num" style={{ color: C.muted, minWidth: 92 }}>{fmt(u.date)}{d >= 0 ? " · " + (d === 0 ? "сьогодні" : "через " + d + " дн.") : ""}</span>
+      <b>{u.employeeName}</b>
+      <span style={{ color }}>{t}</span>
+      <span>{u.project} {Number(u.percent.toFixed(2))}%{u.temporary && u.kind === "join" && u.returnDate ? " до " + fmt(u.returnDate) : ""}</span>
+    </div>
   );
 }
 
@@ -354,32 +439,69 @@ function Incoming({ data, mine, notes, setNotes, busy, act, card, onApproveAll, 
 function People({ data, mine, q, setQ, card }) {
   const on = new Set(data.onMine);
   const ql = q.trim().toLowerCase();
-  const rows = data.people.filter((p) => on.has(p.id) && (!ql || (p.name + " " + p.position).toLowerCase().includes(ql)));
-  const fte = {};
-  data.people.filter((p) => on.has(p.id)).forEach((p) => p.alloc.forEach((r) => { if (mine.has(r.project)) fte[r.project] = (fte[r.project] || 0) + r.percent / 100; }));
+  const all = data.people.filter((p) => on.has(p.id));
+  const rows = all.filter((p) => !ql || (p.name + " " + p.position).toLowerCase().includes(ql));
+  const stat = {};
+  [...mine].forEach((pr) => { stat[pr] = { fte: 0, n: 0 }; });
+  all.forEach((p) => p.alloc.forEach((r) => { if (mine.has(r.project)) { stat[r.project].fte += r.percent / 100; stat[r.project].n++; } }));
+  const sum = (p) => p.alloc.reduce((s2, x) => s2 + x.percent, 0);
+  const partial = all.filter((p) => sum(p) < 99.9 || sum(p) > 100.1);
+  const nextOf = (id) => (data.upcoming || []).find((u) => u.employeeId === id);
   return (
-    <section style={{ ...card, overflow: "hidden" }}>
-      <div style={{ padding: "16px 20px", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", borderBottom: "1px solid " + C.lineSoft }}>
-        <h2 style={{ margin: 0, fontSize: 17 }}>Люди на ваших проєктах сьогодні</h2>
-        <span className="num" style={{ color: C.muted, fontSize: 13 }}>{Object.entries(fte).map(([p, v]) => p + ": " + Number(v.toFixed(2)) + " ставки").join(" · ")}</span>
-        <input type="text" placeholder="пошук" value={q} onChange={(e) => setQ(e.target.value)} style={{ marginLeft: "auto", width: 220 }} />
-      </div>
-      <div className="scroll">
-        <table>
-          <thead><tr><th>Людина</th><th>Посада</th><th>Розподіл</th></tr></thead>
-          <tbody>
-            {rows.map((p) => (
-              <tr key={p.id}>
-                <td>{p.name}</td>
-                <td style={{ color: C.ink2 }}>{p.position || "—"}</td>
-                <td>{p.alloc.map((r, i) => <span key={r.project} style={{ fontWeight: mine.has(r.project) ? 600 : 400, color: mine.has(r.project) ? C.ink : C.muted }}>{i ? " + " : ""}{r.project} {Number(r.percent.toFixed(2))}%</span>)}</td>
-              </tr>
-            ))}
-            {!rows.length && <tr><td colSpan={3} style={{ color: C.muted }}>Нікого не знайдено.</td></tr>}
-          </tbody>
-        </table>
-      </div>
-    </section>
+    <>
+      <section style={{ ...card, padding: "16px 20px", display: "grid", gap: 12 }}>
+        <h2 style={{ margin: 0, fontSize: 17 }}>Ваші проєкти</h2>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 10 }}>
+          {Object.entries(stat).map(([pr, v]) => {
+            const ch = (data.upcoming || []).filter((u) => u.project === pr);
+            return (
+              <div key={pr} style={{ border: "1px solid " + C.line, borderRadius: 10, padding: "12px 14px" }}>
+                <div style={{ fontWeight: 600 }}>{pr}</div>
+                <div className="num" style={{ fontSize: 22, fontWeight: 700, marginTop: 2 }}>{Number(v.fte.toFixed(2))} <span style={{ fontSize: 12, fontWeight: 500, color: C.muted }}>ставки</span></div>
+                <div style={{ fontSize: 12.5, color: C.muted }}>{v.n} {plural(v.n, "людина", "людини", "людей")}{ch.length ? " · змін найближчим часом: " + ch.length : ""}</div>
+              </div>
+            );
+          })}
+        </div>
+        {partial.length > 0 && (
+          <div style={{ background: C.warnSoft, borderRadius: 8, padding: "8px 12px", fontSize: 12.5, color: C.warn }}>
+            Розподіл не дорівнює 100%: {partial.slice(0, 6).map((p) => p.name + " (" + Number(sum(p).toFixed(1)) + "%)").join(", ")}{partial.length > 6 ? " та ще " + (partial.length - 6) : ""}.
+            Повідомте адміністратору, щоб людина не лишилася без тегу.
+          </div>
+        )}
+      </section>
+      {(data.upcoming || []).length > 0 && (
+        <section style={{ ...card, padding: "16px 20px", display: "grid", gap: 6 }}>
+          <h2 style={{ margin: "0 0 4px", fontSize: 17 }}>Найближчі 45 днів</h2>
+          {data.upcoming.map((u, i) => <UpcomingLine key={i} u={u} today={data.today} />)}
+        </section>
+      )}
+      <section style={{ ...card, overflow: "hidden" }}>
+        <div style={{ padding: "16px 20px", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", borderBottom: "1px solid " + C.lineSoft }}>
+          <h2 style={{ margin: 0, fontSize: 17 }}>Люди сьогодні</h2>
+          <input type="text" placeholder="пошук" value={q} onChange={(e) => setQ(e.target.value)} style={{ marginLeft: "auto", width: 220 }} />
+        </div>
+        <div className="scroll">
+          <table>
+            <thead><tr><th>Людина</th><th>Посада</th><th>Розподіл</th><th>Далі</th></tr></thead>
+            <tbody>
+              {rows.map((p) => {
+                const n = nextOf(p.id);
+                return (
+                  <tr key={p.id}>
+                    <td>{p.name}</td>
+                    <td style={{ color: C.ink2 }}>{p.position || "—"}</td>
+                    <td>{p.alloc.map((r, i) => <span key={r.project} style={{ fontWeight: mine.has(r.project) ? 600 : 400, color: mine.has(r.project) ? C.ink : C.muted }}>{i ? " + " : ""}{r.project} {Number(r.percent.toFixed(2))}%</span>)}</td>
+                    <td style={{ fontSize: 12.5, color: n ? UPC[n.kind][1] : C.muted }}>{n ? fmt(n.date) + " · " + UPC[n.kind][0] : "—"}</td>
+                  </tr>
+                );
+              })}
+              {!rows.length && <tr><td colSpan={4} style={{ color: C.muted }}>Нікого не знайдено.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </>
   );
 }
 
@@ -424,12 +546,20 @@ function FactForm({ item, data, busy, act, onDone }) {
   );
 }
 
+function DueBadge({ periodKey, today }) {
+  const left = daysBetween(today, dueOf(periodKey));
+  if (left >= 3) return null;
+  const late = left < 0;
+  return <Pill v={[late ? "прострочено на " + -left + " дн." : left === 0 ? "внести сьогодні" : "залишилось " + left + " дн.", late ? C.stop : C.warn, late ? C.stopSoft : C.warnSoft]} />;
+}
+
 function TodoCard({ s, data, busy, act }) {
   return (
     <div style={{ border: "1px solid " + C.line, borderRadius: 10, padding: 14, display: "grid", gap: 8 }}>
       <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
         <b>{s.employeeName}</b>
         <span style={{ color: C.muted, fontSize: 12.5 }}>{perLabel(s.periodKey)}</span>
+        <DueBadge periodKey={s.periodKey} today={data.today} />
       </div>
       <div style={{ fontSize: 13.5 }}>Переведення {transferLine(s.transfer)}</div>
       <div style={{ fontSize: 12.5, color: C.ink2 }}>
@@ -440,14 +570,17 @@ function TodoCard({ s, data, busy, act }) {
   );
 }
 
-function Facts({ data, mine, isAdmin, busy, act, card }) {
+function Facts({ data, mine, isAdmin, busy, act, card, onPlannedAll }) {
   const [editId, setEditId] = useState("");
   const list = data.loans.filter((l) => isAdmin || mine.has(l.project));
   return (
     <>
       <section style={{ ...card, padding: 20, display: "grid", gap: 14 }}>
         <div>
-          <h2 style={{ margin: 0, fontSize: 17 }}>Потрібно внести факт {data.todo.length > 0 && <span style={{ color: C.warn }}>· {data.todo.length}</span>}</h2>
+          <div style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
+            <h2 style={{ margin: 0, fontSize: 17 }}>Потрібно внести факт {data.todo.length > 0 && <span style={{ color: C.warn }}>· {data.todo.length}</span>}</h2>
+            {data.todo.length > 0 && <button className="ghost" disabled={busy} style={{ marginLeft: "auto" }} onClick={onPlannedAll}>«Як заплановано» для всіх · {data.todo.length}</button>}
+          </div>
           <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>
             Для тимчасових і часткових переведень, які приймає ваш проєкт, після кожної завершеної половини місяця внесіть, скільки годин людина фактично відпрацювала у вас,
             або натисніть «Як заплановано». Підтверджує PM проєкту, звідки людина. Поки факту немає, тег іде за планом (переведенням). Підтверджені години змінюють тег:
@@ -455,7 +588,7 @@ function Facts({ data, mine, isAdmin, busy, act, card }) {
           </p>
         </div>
         {!data.todo.length && <p style={{ margin: 0, color: C.muted }}>Нічого вносити: за завершеними періодами всі тимчасові й часткові переведення ваших проєктів уже мають факт.</p>}
-        {data.todo.map((s) => <TodoCard key={s.transferId + s.project + s.periodKey} s={s} data={data} busy={busy} act={act} />)}
+        {data.todo.slice().sort((x, y) => dueOf(x.periodKey).localeCompare(dueOf(y.periodKey)) || x.employeeName.localeCompare(y.employeeName, "uk")).map((s) => <TodoCard key={s.transferId + s.project + s.periodKey} s={s} data={data} busy={busy} act={act} />)}
       </section>
 
       <section style={{ ...card, overflow: "hidden" }}>
@@ -557,6 +690,48 @@ function Confirm({ data, mine, isAdmin, list, notes, setNotes, busy, act, card, 
   );
 }
 
+/* ── історія рішень ── */
+function History({ data, card }) {
+  const [q, setQ] = useState("");
+  const [kind, setKind] = useState("all");
+  const [st, setSt] = useState("all");
+  const ql = q.trim().toLowerCase();
+  const list = (data.decisions || []).filter((d) => (kind === "all" || d.kind === kind) && (st === "all" || d.status === st)
+    && (!ql || (d.text + " " + d.by + " " + d.project + " " + d.comment).toLowerCase().includes(ql)));
+  return (
+    <section style={{ ...card, overflow: "hidden" }}>
+      <div style={{ padding: "16px 20px", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", borderBottom: "1px solid " + C.lineSoft }}>
+        <h2 style={{ margin: 0, fontSize: 17 }}>Історія рішень</h2>
+        <select value={kind} onChange={(e) => setKind(e.target.value)} aria-label="Тип" style={{ width: "auto" }}>
+          <option value="all">усі типи</option><option>Переведення</option><option>Запит на людину</option><option>Години</option>
+        </select>
+        <select value={st} onChange={(e) => setSt(e.target.value)} aria-label="Рішення" style={{ width: "auto" }}>
+          <option value="all">усі рішення</option><option value="approved">погоджено</option><option value="rejected">заперечено</option>
+        </select>
+        <input type="text" placeholder="пошук: людина, PM, коментар" value={q} onChange={(e) => setQ(e.target.value)} style={{ marginLeft: "auto", width: 260 }} />
+      </div>
+      <div className="scroll">
+        <table>
+          <thead><tr><th>Коли</th><th>Тип</th><th>Що</th><th>Проєкт</th><th>Рішення</th></tr></thead>
+          <tbody>
+            {list.map((d, i) => (
+              <tr key={i}>
+                <td className="num" style={{ whiteSpace: "nowrap" }}>{d.at ? fmtDT(d.at) : "—"}</td>
+                <td>{d.kind}</td>
+                <td>{d.text}{d.comment && <div style={{ fontSize: 12, color: C.muted }}>«{d.comment}»</div>}</td>
+                <td>{d.project}</td>
+                <td><Pill v={APPR[d.status] || APPR.pending} /><div style={{ fontSize: 12, color: C.muted }}>{d.by}</div></td>
+              </tr>
+            ))}
+            {!list.length && <tr><td colSpan={5} style={{ color: C.muted }}>Рішень поки немає.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+
 /* ── заявка на переведення ── */
 function Request({ data, busy, act, card, addBtn, label }) {
   const [who, setWho] = useState("");
@@ -593,6 +768,11 @@ function Request({ data, busy, act, card, addBtn, label }) {
             <input id="rq-who" type="text" list="rq-people" value={who} onChange={(e) => setWho(e.target.value)} placeholder="почніть вводити ім'я" style={{ width: "100%" }} />
             <datalist id="rq-people">{data.people.map((p) => <option key={p.id} value={p.name}>{allocText(p.alloc)}</option>)}</datalist>
             {emp && <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>зараз: {allocText(emp.alloc)}</div>}
+            {emp && (data.futureMoves || {})[emp.id] && (
+              <div style={{ fontSize: 12, color: C.warn, marginTop: 4 }}>
+                Вже є переведення: {data.futureMoves[emp.id].map((m) => "з " + fmt(m.effective) + " → " + allocText(m.to) + (m.temporary ? " (до " + fmt(m.returnDate) + ")" : "")).join("; ")}. Перевірте, щоб заявка не суперечила.
+              </div>
+            )}
           </div>
           <div>
             <label style={label} htmlFor="rq-date">З дати</label>

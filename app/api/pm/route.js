@@ -32,6 +32,7 @@ export const dynamic = "force-dynamic";
         (достатньо будь-кого з PM проєкту; адміністратор може створити переведення й попри заперечення). */
 
 const REQUESTS_KEY = "transfers:requests:v1";
+const DEPUTIES_KEY = "pm:deputies:v1"; // заступництво: [{ id, pm, deputy, from, to, setAt }]
 const str = (v, n) => String(v == null ? "" : v).trim().slice(0, n);
 const nowISO = () => new Date().toISOString();
 const kyivToday = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Kyiv" }).format(new Date());
@@ -46,19 +47,22 @@ async function gate(request) {
   return { me };
 }
 
-function ctx(state, me) {
+function ctx(state, me, deputies = []) {
   const tomb = state.deleted || {};
   const pms = state.pms || {};
   const live = (p) => p && !tomb["p:" + p];
   const allProjects = orderProjects((state.projects || []).filter(live), state.projectMeta);
-  const mine = new Set(allProjects.filter((p) => isPm(pms[p], me.name)));
+  // Заступництво: поки діє, проєкти колеги-PM стають і моїми (погоджую, вношу й підтверджую від імені проєкту).
+  const today0 = kyivToday();
+  const covering = (deputies || []).filter((d) => sameName(d.deputy, me.name) && d.from <= today0 && d.to >= today0);
+  const mine = new Set(allProjects.filter((p) => isPm(pms[p], me.name) || covering.some((d) => isPm(pms[p], d.pm))));
   const employees = (state.employees || []).filter((e) => !tomb["e:" + e.id]);
   const transfers = (state.transfers || []).filter((t) => !tomb["t:" + t.id]).map((t) => ({ ...t, from: asAlloc(t.from), to: asAlloc(t.to) }));
   // Місяці, закриті у фін. обліку: теги там уже зафіксовані, факт їх не змінить.
   const closed = new Set((state.fin || []).filter((x) => x && String(x.id).startsWith("fc_") && x.closed).map((x) => String(x.id).slice(3)));
   // Колеги: усі PM моїх проєктів (разом зі мною).
   const colleagues = new Set([...mine].flatMap((p) => pmList(pms[p])).map(low));
-  return { tomb, pms, allProjects, mine, employees, transfers, closed, colleagues, isAdmin: me.role === "admin" };
+  return { tomb, pms, allProjects, mine, employees, transfers, closed, colleagues, covering, isAdmin: me.role === "admin" };
 }
 
 const workedIn = (emp, periodKey) => {
@@ -88,8 +92,8 @@ function todoFacts(c, loans, today) {
   return out.sort((a, b) => a.periodKey.localeCompare(b.periodKey) || a.employeeName.localeCompare(b.employeeName)).slice(0, 300);
 }
 
-function view(state, me, loans, requests) {
-  const c = ctx(state, me);
+function view(state, me, loans, requests, deputies = []) {
+  const c = ctx(state, me, deputies);
   const today = kyivToday();
   const working = c.employees.filter((e) => workingOn(e, today));
   const people = working.map((e) => ({ id: e.id, name: e.name, position: e.position || "", alloc: allocAt(e, c.transfers, today) }));
@@ -120,8 +124,59 @@ function view(state, me, loans, requests) {
   const byId = new Map(c.transfers.map((t) => [t.id, t]));
   const myLoans = (c.isAdmin ? loans : loans.filter((l) => c.mine.has(l.project) || lendersOf(l).some((p) => c.mine.has(p)) || sameName(l.createdBy, me.name)))
     .map((l) => ({ ...l, lenderProjects: lendersOf(l), transfer: transferInfo(byId.get(l.transferId)), stale: !loanFits(l, byId.get(l.transferId)) }));
+  /* Найближчі зміни на моїх проєктах (45 днів): хто приходить, іде, повертається. */
+  const horizon = new Date(Date.parse(today) + 45 * 86400000).toISOString().slice(0, 10);
+  const amap = (a) => { const m = {}; (a || []).forEach((x) => { m[x.project] = (m[x.project] || 0) + (Number(x.percent) || 0); }); return m; };
+  const nameOfEmp = (t) => t.employeeName || (c.employees.find((e) => e.id === t.employeeId) || {}).name || "";
+  const upcoming = [];
+  c.transfers.filter((t) => !t.cancelled).forEach((t) => {
+    const f = amap(t.from), to = amap(t.to);
+    new Set([...Object.keys(f), ...Object.keys(to)]).forEach((pr) => {
+      if (!c.mine.has(pr)) return;
+      const d = (to[pr] || 0) - (f[pr] || 0);
+      if (Math.abs(d) < 0.01) return;
+      const base = { employeeId: t.employeeId, employeeName: nameOfEmp(t), project: pr, percent: Math.round(Math.abs(d) * 100) / 100, temporary: !!t.temporary, returnDate: t.returnDate || "" };
+      if (t.effectiveDate >= today && t.effectiveDate <= horizon) upcoming.push({ ...base, date: t.effectiveDate, kind: d > 0 ? "join" : "leave" });
+      // Тимчасове: на дату повернення людина залишає мій проєкт («end») або повертається на нього («back»).
+      if (t.temporary && t.returnDate && t.returnDate >= today && t.returnDate <= horizon) upcoming.push({ ...base, date: t.returnDate, kind: d > 0 ? "end" : "back" });
+    });
+  });
+  upcoming.sort((a, b) => a.date.localeCompare(b.date) || a.employeeName.localeCompare(b.employeeName, "uk"));
+  // Для заявки: чи в людини вже є переведення в майбутньому.
+  const futureMoves = {};
+  c.transfers.filter((t) => !t.cancelled && (t.effectiveDate >= today || (t.temporary && t.returnDate >= today))).forEach((t) => {
+    (futureMoves[t.employeeId] = futureMoves[t.employeeId] || []).push({ date: t.effectiveDate >= today ? t.effectiveDate : t.returnDate, effective: t.effectiveDate, to: t.to, temporary: !!t.temporary, returnDate: t.returnDate || "" });
+  });
+  Object.keys(futureMoves).forEach((id) => { futureMoves[id] = futureMoves[id].sort((a, b) => a.date.localeCompare(b.date)).slice(0, 3); });
+  /* Історія рішень по моїх проєктах: переведення, запити на людей, години. */
+  const allocStr = (a) => (!a || !a.length ? "—" : a.map((x) => x.project + (x.percent === 100 ? "" : " " + Math.round(x.percent * 100) / 100 + "%")).join(" + "));
+  const decisions = [];
+  c.transfers.filter((t) => !t.cancelled).forEach((t) => (t.approvals || []).forEach((a) => {
+    if (a.status === "pending" || !c.mine.has(a.project)) return;
+    decisions.push({ at: a.at || t.updatedAt || "", kind: "Переведення", status: a.status, by: a.by || "", project: a.project, comment: a.comment || "",
+      text: nameOfEmp(t) + ": " + allocStr(t.from) + " → " + allocStr(t.to) + ", з " + t.effectiveDate });
+  }));
+  requests.forEach((r) => (r.approvals || []).forEach((a) => {
+    if (a.role !== "give" || a.status === "pending" || !c.mine.has(a.project)) return;
+    decisions.push({ at: a.at || r.createdAt || "", kind: "Запит на людину", status: a.status, by: a.by || "", project: a.project, comment: a.comment || "",
+      text: (r.employee || "") + " → " + allocStr(r.alloc) + ", з " + r.effectiveDate + (r.requester ? " · просить " + r.requester : "") });
+  }));
+  loans.filter((l) => l.status !== "pending" && (c.isAdmin || lendersOf(l).some((p) => c.mine.has(p)) || c.mine.has(l.project))).forEach((l) => {
+    decisions.push({ at: l.decidedAt || l.updatedAt || "", kind: "Години", status: l.status === "confirmed" ? "approved" : "rejected", by: l.decidedBy || "", project: l.project, comment: l.decisionComment || "",
+      text: (l.employeeName || "") + ": " + (l.hours > 0 ? l.hours + " год" : "як заплановано") + ", " + l.periodKey });
+  });
+  decisions.sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  const pmNamesAll = [...new Set(Object.values(c.pms).flatMap((v) => pmList(v)))].filter((n) => !sameName(n, me.name)).sort((a, b) => a.localeCompare(b, "uk"));
   return {
     me: { name: me.name, role: me.role },
+    upcoming: upcoming.slice(0, 100),
+    futureMoves,
+    decisions: decisions.slice(0, 300),
+    deputy: {
+      covering: c.covering.map((d) => ({ pm: d.pm, to: d.to })),
+      mine: (deputies || []).find((d) => sameName(d.pm, me.name) && d.to >= today) || null,
+      candidates: pmNamesAll,
+    },
     myProjects: [...c.mine],
     projects: c.allProjects.filter((p) => !isInactive(state.projectMeta, p)),
     pms: Object.fromEntries(c.allProjects.map((p) => [p, pmList(c.pms[p]).join("; ")])),
@@ -139,14 +194,14 @@ function view(state, me, loans, requests) {
 }
 
 async function load() {
-  return { state: (await readState()) || {}, loans: (await readKey(LOANS_KEY)) || [], requests: (await readKey(REQUESTS_KEY)) || [] };
+  return { state: (await readState()) || {}, loans: (await readKey(LOANS_KEY)) || [], requests: (await readKey(REQUESTS_KEY)) || [], deputies: (await readKey(DEPUTIES_KEY)) || [] };
 }
 
 export async function GET(request) {
   const g = await gate(request);
   if (g.res) return g.res;
-  const { state, loans, requests } = await load();
-  return NextResponse.json(view(state, g.me, loans, requests));
+  const { state, loans, requests, deputies } = await load();
+  return NextResponse.json(view(state, g.me, loans, requests, deputies));
 }
 
 export async function POST(request) {
@@ -155,8 +210,8 @@ export async function POST(request) {
   const me = g.me;
   let body;
   try { body = await request.json(); } catch (e) { return bad("Некоректний запит."); }
-  const { state, requests } = await load();
-  const c = ctx(state, me);
+  const { state, requests, deputies } = await load();
+  const c = ctx(state, me, deputies);
   const stamp = nowISO();
   const today = kyivToday();
   const canAct = (project) => c.isAdmin || c.mine.has(project);
@@ -165,7 +220,25 @@ export async function POST(request) {
   const log = (action, details) => ({ id: uid("l_pm"), at: stamp, who: me.name, email: "", action, details });
   // Два PM на проєкті можуть діяти одночасно: перед записом перечитуємо актуальні дані.
   const freshLoans = async () => ((await readKey(LOANS_KEY)) || []).slice();
-  const done = async () => NextResponse.json(view((await readState()) || {}, me, (await readKey(LOANS_KEY)) || [], (await readKey(REQUESTS_KEY)) || []));
+  const done = async () => NextResponse.json(view((await readState()) || {}, me, (await readKey(LOANS_KEY)) || [], (await readKey(REQUESTS_KEY)) || [], (await readKey(DEPUTIES_KEY)) || []));
+
+  /* ── заступник: поки діє, колега погоджує й вносить факт від імені моїх проєктів ── */
+  if (body.action === "deputy-set" || body.action === "deputy-clear") {
+    const rest = ((await readKey(DEPUTIES_KEY)) || []).filter((d) => !sameName(d.pm, me.name) && d.to >= today);
+    if (body.action === "deputy-set") {
+      const deputy = str(body.deputy, 120), from = str(body.from, 10), to = str(body.to, 10);
+      if (!DATE_RE.test(from) || !DATE_RE.test(to) || to < from || to < today) return bad("Вкажіть коректні дати заступництва: «до» не раніше «з» і не в минулому.");
+      const known = [...new Set(Object.values(c.pms).flatMap((v) => pmList(v)))].find((n) => sameName(n, deputy));
+      if (!known || sameName(known, me.name)) return bad("Заступником може бути інший PM зі списку PM у довіднику проєктів.");
+      rest.push({ id: uid("dp_"), pm: me.name, deputy: known, from, to, setAt: stamp });
+    }
+    await writeKey(DEPUTIES_KEY, rest);
+    const fresh = (await readState()) || {};
+    fresh.log = [log(body.action === "deputy-set" ? "призначив заступника PM" : "зняв заступника PM", body.action === "deputy-set" ? str(body.deputy, 120) + " · " + str(body.from, 10) + " — " + str(body.to, 10) : ""), ...(fresh.log || [])].slice(0, 300);
+    fresh.updatedAt = stamp; fresh.updatedBy = me.name;
+    await writeState(fresh);
+    return done();
+  }
 
   /* ── погодження переведення ── */
   if (body.action === "decide") {
