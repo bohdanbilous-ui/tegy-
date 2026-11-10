@@ -150,6 +150,7 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
         like: "", off: false, fixed: f.fixed || "fpv-100", fileFixed: "", parts: parts.map((p) => ({ ...p, project: p.code })), source: "FPV", notes: [], sp });
     });
     const byId = new Map(list.map((r) => [r.id, r]));
+    const nameById = new Map([...list.map((r) => [r.id, r.short]), ...employees.map((e) => [e.id, e.name])]);
     list.forEach((r) => {
       if (!r.like) return;
       const t = byId.get(r.like);
@@ -168,6 +169,11 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
       if (badCode.length) prob.push("невідомий код: " + badCode.join(", "));
       if (r.parts.length && !noCode.length && sum !== 100) prob.push("сума " + sum + "%");
       if (!inn[r.id]) prob.push("немає ІПН");
+      else {
+        if (inn[r.id].bad) prob.push("ІПН: " + inn[r.id].bad);
+        const twins = (inn[r.id].dupWith || []).map((id) => (nameById.get(id) || "")).filter(Boolean);
+        if (twins.length) prob.push("ІПН збігається з: " + twins.join(", "));
+      }
       if (!r.legal) prob.push("немає юрособи");
       else if (legalBook.length && !legalNames.includes(r.legal)) prob.push("юрособи «" + r.legal + "» немає в довіднику");
       r.tagBody = r.parts.filter((p) => p.code).map((p) => p.code + "-" + p.pct).join(",");
@@ -191,6 +197,8 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
   // Типи проблем: щоб бухгалтер бачив, що саме не готово, і одним кліком відфільтрував рядки.
   const ISSUES = [
     ["inn", "без ІПН", (t) => t === "немає ІПН"],
+    ["innbad", "некоректний ІПН", (t) => t.startsWith("ІПН: ")],
+    ["inndup", "дубль ІПН", (t) => t.startsWith("ІПН збігається")],
     ["legal", "без юрособи", (t) => t.startsWith("немає юрособи") || t.startsWith("юрособи «")],
     ["type", "без типу Штат/Гіг", (t) => t.startsWith("немає типу")],
     ["fio", "ПІБ неповний", (t) => t.startsWith("ПІБ")],
@@ -267,7 +275,11 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
     try {
       const d = await callPay("POST", { action: "inn", items: [{ id: r.id, inn: v.trim() }] });
       setInn(d.inn || {});
-      setToast(d.bad ? "ІПН не збережено: має бути 8–12 цифр або літер." : v.trim() ? "ІПН збережено." : "ІПН прибрано.");
+      const saved = (d.inn || {})[r.id];
+      setToast(d.bad ? "ІПН не збережено: має бути 8–12 цифр або літер."
+        : v.trim() && saved && saved.bad ? "ІПН збережено, але: " + saved.bad + "."
+        : v.trim() && saved && saved.dupWith ? "ІПН збережено, але такий самий уже в іншої людини."
+        : v.trim() ? "ІПН збережено." : "ІПН прибрано.");
     } catch (e) { setToast("Не вдалося зберегти ІПН: " + e.message); }
   }
 
