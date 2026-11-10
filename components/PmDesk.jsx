@@ -62,8 +62,8 @@ async function call(token, method, body) {
 
 export default function PmDesk({ user, token, onSignOut, onApiError }) {
   const [data, setData] = useState(null);
-  const TAB_KEYS = ["home", "approve", "people", "loans", "confirm", "request", "history"];
-  const [tab, setTabState] = useState("home");
+  const TAB_KEYS = ["request", "home", "approve", "people", "loans", "confirm", "history"];
+  const [tab, setTabState] = useState("request");
   // Розділ у адресі (#approve): оновлення сторінки й «назад» не кидають на головну.
   useEffect(() => {
     const fromHash = () => { const h = String(window.location.hash || "").replace("#", ""); if (TAB_KEYS.includes(h)) setTabState(h); };
@@ -157,12 +157,12 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
 
   const todoTotal = pendingApprovals.length + incomingPending.length + (data ? data.todo.length : 0) + toConfirm.length;
   const TABS = [
+    ["request", "Нова заявка", 0],
     ["home", "Що зробити", todoTotal],
     ["approve", "Погодження", pendingApprovals.length + incomingPending.length],
     ["people", "Люди", 0],
     ["loans", "Внести факт", data ? data.todo.length : 0],
     ["confirm", "Години колег", toConfirm.length],
-    ["request", "Нова заявка", 0],
     ["history", "Історія рішень", 0],
   ];
 
