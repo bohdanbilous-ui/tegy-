@@ -111,7 +111,6 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
   const incomingReqs = incomingPending.flatMap((x) => (x.approvals || []).filter((a) => a.role === "give" && mine.has(a.project) && a.status === "pending")
     .map((a) => ({ action: "req-decide", requestId: x.id, project: a.project, ok: true, comment: "" })));
   const confirmReqs = toConfirm.map((l) => ({ action: "loan-decide", id: l.id, ok: true, comment: "" }));
-  const plannedReqs = data ? data.todo.map((x) => ({ action: "loan-save", transferId: x.transferId, project: x.project, periodKey: x.periodKey, hours: 0, asPlanned: true, comment: "" })) : [];
   const bulk = (reqs, what, doneText) => {
     if (!reqs.length) return;
     if (!window.confirm(what + ": " + reqs.length + ". Підтвердити все одразу? Заперечити можна лише окремо, з коментарем.")) return;
@@ -200,7 +199,6 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
 
         {data && tab === "home" && (
           <Home data={data} card={card} go={setTab} isAdmin={isAdmin} busy={busy} act={act}
-            onPlannedAll={() => bulk(plannedReqs, "Внести «як заплановано»", "Внесено")}
             overdue={{ facts: data.todo.filter((x) => dueOf(x.periodKey) < data.today).length, approve: pendingApprovals.filter((t) => t.effectiveDate < data.today).length }}
             counts={{ approve: pendingApprovals.length, incoming: incomingPending.length, facts: data.todo.length, confirm: toConfirm.length }} />
         )}
@@ -208,7 +206,7 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
           onApproveAll={() => bulk(approveReqs, "Погодити переведень", "Погоджено")} onApproveAllReq={() => bulk(incomingReqs, "Погодити запитів на ваших людей", "Погоджено")}
           nApprove={approveReqs.length} nReq={incomingReqs.length} />}
         {data && tab === "people" && <People data={data} mine={mine} q={q} setQ={setQ} card={card} />}
-        {data && tab === "loans" && <Facts data={data} mine={mine} isAdmin={isAdmin} busy={busy} act={act} card={card} onPlannedAll={() => bulk(plannedReqs, "Внести «як заплановано»", "Внесено")} />}
+        {data && tab === "loans" && <Facts data={data} mine={mine} isAdmin={isAdmin} busy={busy} act={act} card={card} />}
         {data && tab === "history" && <History data={data} card={card} />}
         {data && tab === "confirm" && <Confirm data={data} mine={mine} isAdmin={isAdmin} list={toConfirm} notes={notes} setNotes={setNotes} busy={busy} act={act} card={card}
           onConfirmAll={() => bulk(confirmReqs, "Підтвердити записів годин", "Підтверджено")} />}
@@ -256,7 +254,7 @@ function Deputy({ data, busy, act }) {
 }
 
 /* ── головна: що робити зараз ── */
-function Home({ data, card, go, counts, overdue, isAdmin, busy, act, onPlannedAll }) {
+function Home({ data, card, go, counts, overdue, isAdmin, busy, act }) {
   const items = [
     ["approve", counts.approve, "Переведення чекають на ваше погодження", "Погоджуєте вже доконане переведення: ваша людина йде або приходить до проєкту.", overdue.approve ? overdue.approve + " уже діють" : ""],
     ["approve", counts.incoming, "Запити на людей з ваших проєктів", "Інший PM просить вашу людину. Ваше слово бачить адміністратор.", ""],
@@ -290,12 +288,6 @@ function Home({ data, card, go, counts, overdue, isAdmin, busy, act, onPlannedAl
           </button>
         ))}
       </div>
-      {counts.facts > 0 && (
-        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <button className="ghost" disabled={busy} onClick={onPlannedAll}>Внести «як заплановано» для всіх · {counts.facts}</button>
-          <span style={{ fontSize: 12.5, color: C.muted }}>Якщо люди відпрацювали стільки, скільки передбачає переведення. Винятки впишіть окремо у вкладці «Факт».</span>
-        </div>
-      )}
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
         <button className="link" onClick={() => go("people")}>Люди ваших проєктів</button>
         <button className="link" onClick={() => go("request")}>Подати заявку на переведення</button>
@@ -570,17 +562,14 @@ function TodoCard({ s, data, busy, act }) {
   );
 }
 
-function Facts({ data, mine, isAdmin, busy, act, card, onPlannedAll }) {
+function Facts({ data, mine, isAdmin, busy, act, card }) {
   const [editId, setEditId] = useState("");
   const list = data.loans.filter((l) => isAdmin || mine.has(l.project));
   return (
     <>
       <section style={{ ...card, padding: 20, display: "grid", gap: 14 }}>
         <div>
-          <div style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
-            <h2 style={{ margin: 0, fontSize: 17 }}>Потрібно внести факт {data.todo.length > 0 && <span style={{ color: C.warn }}>· {data.todo.length}</span>}</h2>
-            {data.todo.length > 0 && <button className="ghost" disabled={busy} style={{ marginLeft: "auto" }} onClick={onPlannedAll}>«Як заплановано» для всіх · {data.todo.length}</button>}
-          </div>
+          <h2 style={{ margin: 0, fontSize: 17 }}>Потрібно внести факт {data.todo.length > 0 && <span style={{ color: C.warn }}>· {data.todo.length}</span>}</h2>
           <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>
             Для тимчасових і часткових переведень, які приймає ваш проєкт, після кожної завершеної половини місяця внесіть, скільки годин людина фактично відпрацювала у вас,
             або натисніть «Як заплановано». Підтверджує PM проєкту, звідки людина. Поки факту немає, тег іде за планом (переведенням). Підтверджені години змінюють тег:
