@@ -11,6 +11,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { normHours, lendersOf } from "../lib/loans";
 import { pmText } from "../lib/pms";
+import Info from "./Info";
 
 const C = {
   paper: "#F5F7FB", surface: "#FFFFFF", ink: "#0F172A", ink2: "#334155",
@@ -55,7 +56,7 @@ async function call(token, method, body) {
 
 export default function PmDesk({ user, token, onSignOut, onApiError }) {
   const [data, setData] = useState(null);
-  const [tab, setTab] = useState("approve");
+  const [tab, setTab] = useState("home");
   const [toast, setToast] = useState(null);
   const [busy, setBusy] = useState(false);
   const [notes, setNotes] = useState({});
@@ -75,6 +76,21 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
     finally { setBusy(false); }
   }
 
+  // Масове погодження: по одному запиту на рішення, поспіль; помилки не зупиняють решту (крім виходу з сесії).
+  async function runBulk(reqs, doneText) {
+    if (!reqs.length) return;
+    setBusy(true);
+    let ok = 0, last = null, firstErr = "";
+    try {
+      for (const body of reqs) {
+        try { last = await call(token, "POST", body); ok++; }
+        catch (e) { if (e.status === 401) { onApiError && onApiError(e); return; } if (!firstErr) firstErr = e.message; }
+      }
+      if (last) setData(last); else await load();
+      setToast(doneText + ": " + ok + " з " + reqs.length + (firstErr ? ". Не вдалося: " + firstErr : ""));
+    } finally { setBusy(false); }
+  }
+
   const mine = useMemo(() => new Set((data && data.myProjects) || []), [data]);
   const isAdmin = data && data.me.role === "admin";
   const pendingApprovals = data ? data.approvals.filter((t) => t.approvals.some((a) => mine.has(a.project) && a.status === "pending")) : [];
@@ -83,6 +99,17 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
   // Те, що я можу підтвердити: PM проєкту, звідки людина; власні записи — ні (їх підтверджує колега або адміністратор).
   const toConfirm = data ? data.loans.filter((l) => l.status === "pending" && !l.stale
     && (isAdmin || (lendersOf(l).some((p) => mine.has(p)) && String(l.createdBy || "").trim().toLowerCase() !== meName))) : [];
+
+  const approveReqs = pendingApprovals.flatMap((t) => t.approvals.filter((a) => mine.has(a.project) && a.status === "pending")
+    .map((a) => ({ action: "decide", transferId: t.id, project: a.project, ok: true, comment: "" })));
+  const incomingReqs = incomingPending.flatMap((x) => (x.approvals || []).filter((a) => a.role === "give" && mine.has(a.project) && a.status === "pending")
+    .map((a) => ({ action: "req-decide", requestId: x.id, project: a.project, ok: true, comment: "" })));
+  const confirmReqs = toConfirm.map((l) => ({ action: "loan-decide", id: l.id, ok: true, comment: "" }));
+  const bulk = (reqs, what, doneText) => {
+    if (!reqs.length) return;
+    if (!window.confirm(what + ": " + reqs.length + ". Підтвердити все одразу? Заперечити можна лише окремо, з коментарем.")) return;
+    runBulk(reqs, doneText);
+  };
 
   const card = { background: C.surface, border: "1px solid " + C.line, borderRadius: 10, boxShadow: "0 1px 2px rgba(15,23,42,.04)" };
   const addBtn = { cursor: "pointer", background: C.signal, color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontWeight: 600, whiteSpace: "nowrap" };
@@ -111,7 +138,9 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
     @media (max-width: 640px) { .pm main { padding: 16px !important; } .pm th, .pm td { padding: 8px 10px; } }
   `;
 
+  const todoTotal = pendingApprovals.length + incomingPending.length + (data ? data.todo.length : 0) + toConfirm.length;
   const TABS = [
+    ["home", "Що зробити", todoTotal],
     ["approve", "Погодження", pendingApprovals.length + incomingPending.length],
     ["people", "Люди проєктів", 0],
     ["loans", "Факт по переведеннях", data ? data.todo.length : 0],
@@ -161,10 +190,17 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
           </section>
         )}
 
-        {data && tab === "approve" && <Approvals data={data} mine={mine} notes={notes} setNotes={setNotes} busy={busy} act={act} card={card} />}
+        {data && tab === "home" && (
+          <Home data={data} card={card} go={setTab} isAdmin={isAdmin}
+            counts={{ approve: pendingApprovals.length, incoming: incomingPending.length, facts: data.todo.length, confirm: toConfirm.length }} />
+        )}
+        {data && tab === "approve" && <Approvals data={data} mine={mine} notes={notes} setNotes={setNotes} busy={busy} act={act} card={card}
+          onApproveAll={() => bulk(approveReqs, "Погодити переведень", "Погоджено")} onApproveAllReq={() => bulk(incomingReqs, "Погодити запитів на ваших людей", "Погоджено")}
+          nApprove={approveReqs.length} nReq={incomingReqs.length} />}
         {data && tab === "people" && <People data={data} mine={mine} q={q} setQ={setQ} card={card} />}
         {data && tab === "loans" && <Facts data={data} mine={mine} isAdmin={isAdmin} busy={busy} act={act} card={card} />}
-        {data && tab === "confirm" && <Confirm data={data} mine={mine} isAdmin={isAdmin} list={toConfirm} notes={notes} setNotes={setNotes} busy={busy} act={act} card={card} />}
+        {data && tab === "confirm" && <Confirm data={data} mine={mine} isAdmin={isAdmin} list={toConfirm} notes={notes} setNotes={setNotes} busy={busy} act={act} card={card}
+          onConfirmAll={() => bulk(confirmReqs, "Підтвердити записів годин", "Підтверджено")} />}
         {data && tab === "request" && <Request data={data} busy={busy} act={act} card={card} addBtn={addBtn} label={label} />}
       </main>
 
@@ -177,25 +213,67 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
   );
 }
 
+/* ── головна: що робити зараз ── */
+function Home({ data, card, go, counts, isAdmin }) {
+  const items = [
+    ["approve", counts.approve, "Переведення чекають на ваше погодження", "Погоджуєте вже доконане переведення: ваша людина йде або приходить до проєкту."],
+    ["approve", counts.incoming, "Запити на людей з ваших проєктів", "Інший PM просить вашу людину. Ваше слово бачить адміністратор."],
+    ["loans", counts.facts, "Внести факт по годинах", "Людина тимчасово або частково працює у вашому проєкті: впишіть, скільки годин вона відпрацювала."],
+    ["confirm", counts.confirm, "Підтвердити години колег", "Колега вніс години вашої людини в його проєкті. Підтвердження впливає на теги."],
+  ];
+  const open = items.filter((x) => x[1] > 0);
+  return (
+    <section style={{ ...card, padding: 20, display: "grid", gap: 14 }}>
+      <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
+        <h2 style={{ margin: 0, fontSize: 17 }}>{open.length ? "Що потрібно зробити" : "Усе зроблено ✓"}</h2>
+        <span style={{ color: C.muted, fontSize: 13 }}>{data.myProjects.length ? "Ваші проєкти: " + data.myProjects.join(", ") : isAdmin ? "Режим адміністратора" : ""}</span>
+      </div>
+      {open.length === 0 && <p style={{ margin: 0, color: C.muted }}>Зараз від вас нічого не потрібно. Нові завдання зʼявляться тут і прийдуть у Slack.</p>}
+      <div style={{ display: "grid", gap: 10 }}>
+        {open.map(([tab, n, title, hint], i) => (
+          <button key={i} onClick={() => go(tab)} style={{ cursor: "pointer", textAlign: "left", display: "flex", gap: 14, alignItems: "center", background: C.warnSoft, border: "1px solid #FED7AA", borderRadius: 10, padding: "14px 16px" }}>
+            <span className="num" style={{ fontSize: 26, fontWeight: 700, color: C.warn, minWidth: 36 }}>{n}</span>
+            <span style={{ flex: 1 }}>
+              <span style={{ display: "block", fontWeight: 600 }}>{title}</span>
+              <span style={{ display: "block", color: C.ink2, fontSize: 12.5, marginTop: 2 }}>{hint}</span>
+            </span>
+            <span style={{ color: C.warn, fontWeight: 600 }}>Відкрити →</span>
+          </button>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+        <button className="link" onClick={() => go("people")}>Люди ваших проєктів</button>
+        <button className="link" onClick={() => go("request")}>Подати заявку на переведення</button>
+      </div>
+      <Info>
+        PM — людина, вписана в поле «PM, який погоджує» проєкту. Ви: 1) погоджуєте переведення людей ваших проєктів; 2) вносите години по тимчасових і часткових переведеннях,
+        які приймає ваш проєкт; 3) підтверджуєте години колег по ваших людях; 4) подаєте заявку, якщо вам потрібна людина з іншого проєкту.
+        Переведення діє з дати незалежно від погодження — ви підтверджуєте вже доконане. Масові кнопки «Погодити всі» є у відповідних розділах, а заперечити можна лише окремо, з коментарем.
+      </Info>
+    </section>
+  );
+}
+
 /* ── погодження ── */
-function Approvals({ data, mine, notes, setNotes, busy, act, card }) {
+function Approvals({ data, mine, notes, setNotes, busy, act, card, onApproveAll, onApproveAllReq, nApprove, nReq }) {
   const [onlyPending, setOnlyPending] = useState(true);
   const list = data.approvals.filter((t) => !onlyPending || t.approvals.some((a) => mine.has(a.project) && a.status === "pending"));
   return (
     <>
-    <Incoming data={data} mine={mine} notes={notes} setNotes={setNotes} busy={busy} act={act} card={card} />
+    <Incoming data={data} mine={mine} notes={notes} setNotes={setNotes} busy={busy} act={act} card={card} onApproveAll={onApproveAllReq} n={nReq} />
     <section style={{ ...card, padding: 20, display: "grid", gap: 14 }}>
       <div style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
         <h2 style={{ margin: 0, fontSize: 17 }}>Переведення ваших проєктів</h2>
-        <label style={{ fontSize: 13, color: C.ink2, marginLeft: "auto" }}>
+        {nApprove > 0 && <button className="ghost" disabled={busy} onClick={onApproveAll} style={{ marginLeft: "auto" }}>Погодити всі · {nApprove}</button>}
+        <label style={{ fontSize: 13, color: C.ink2, marginLeft: nApprove > 0 ? 0 : "auto" }}>
           <input type="checkbox" checked={onlyPending} onChange={(e) => setOnlyPending(e.target.checked)} /> лише ті, що чекають на вас
         </label>
       </div>
-      <p style={{ margin: 0, color: C.muted, fontSize: 12.5 }}>
+      <Info style={{ margin: 0 }}>
         Переведення діє з дати незалежно від погодження — ви підтверджуєте вже доконане. {data.approvalMode === "both"
           ? "Погоджують обидві сторони: і той, хто віддає, і той, хто приймає."
           : "Обов'язкове слово того, хто віддає людину; той, хто приймає, бачить запис до відома."}
-      </p>
+      </Info>
       {!list.length && <p style={{ margin: 0, color: C.muted }}>{onlyPending ? "Нічого не чекає на ваше рішення." : "Переведень за останні місяці немає."}</p>}
       {list.map((t) => (
         <div key={t.id} style={{ border: "1px solid " + C.line, borderRadius: 10, padding: 14, display: "grid", gap: 8 }}>
@@ -230,14 +308,15 @@ function Approvals({ data, mine, notes, setNotes, busy, act, card }) {
 }
 
 /* ── запити на людей з моїх проєктів (заявки інших PM) ── */
-function Incoming({ data, mine, notes, setNotes, busy, act, card }) {
+function Incoming({ data, mine, notes, setNotes, busy, act, card, onApproveAll, n }) {
   const list = data.incoming || [];
   if (!list.length) return null;
   return (
     <section style={{ ...card, padding: 20, display: "grid", gap: 14 }}>
-      <div>
+      <div style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
         <h2 style={{ margin: 0, fontSize: 17 }}>Запити на людей з ваших проєктів</h2>
-        <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>Інший PM просить людину з вашого проєкту. Ваше слово — до адміністратора: він побачить рішення й створить переведення.</p>
+        {n > 0 && <button className="ghost" disabled={busy} onClick={onApproveAll} style={{ marginLeft: "auto" }}>Погодити всі · {n}</button>}
+        <Info style={{ flexBasis: "100%", margin: "0" }}>Інший PM просить людину з вашого проєкту. Ваше слово — до адміністратора: він побачить рішення й створить переведення.</Info>
       </div>
       {list.map((r) => (
         <div key={r.id} style={{ border: "1px solid " + C.line, borderRadius: 10, padding: 14, display: "grid", gap: 8 }}>
@@ -413,19 +492,20 @@ function Facts({ data, mine, isAdmin, busy, act, card }) {
 }
 
 /* ── підтвердження факту: PM проєкту, звідки людина ── */
-function Confirm({ data, mine, isAdmin, list, notes, setNotes, busy, act, card }) {
+function Confirm({ data, mine, isAdmin, list, notes, setNotes, busy, act, card, onConfirmAll }) {
   const meName = String((data.me && data.me.name) || "").trim().toLowerCase();
   const own = (l) => String(l.createdBy || "").trim().toLowerCase() === meName;
   const decided = data.loans.filter((l) => l.status !== "pending" && (isAdmin || lendersOf(l).some((p) => mine.has(p)))).slice(0, 60);
   return (
     <>
       <section style={{ ...card, padding: 20, display: "grid", gap: 12 }}>
-        <div>
+        <div style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
           <h2 style={{ margin: 0, fontSize: 17 }}>Факт по ваших людях на інших проєктах</h2>
-          <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>
+          {list.length > 0 && <button className="ghost" disabled={busy} onClick={onConfirmAll} style={{ marginLeft: "auto" }}>Підтвердити всі · {list.length}</button>}
+          <Info style={{ flexBasis: "100%", margin: "0" }}>
             PM проєкту, який приймає людину, вніс, скільки годин вона фактично відпрацювала в нього за період. Після вашого підтвердження ці години змінять тег людини:
             частка проєкту, що приймає, стане за фактом, а решта піде вашим проєктам. Підтвердити може будь-хто з PM проєкту; власні записи підтверджувати не можна.
-          </p>
+          </Info>
         </div>
         {!list.length && <p style={{ margin: 0, color: C.muted }}>Нічого не чекає на підтвердження.</p>}
         {list.map((l) => {
