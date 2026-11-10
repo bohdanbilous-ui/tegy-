@@ -3737,6 +3737,7 @@ export default function TransferDesk() {
                           <th style={{ width: 160 }}>Команда</th>
                           <th style={{ width: 160 }}>Початковий проєкт</th>
                           <th style={{ width: 110 }}>Переведень</th>
+                          <th style={{ width: 84 }} title="Розподіл подається раз на місяць у періоді 16–кінець місяця; оплата раз на місяць">Парттайм</th>
                           <th style={{ width: 44 }} />
                         </tr></thead>
                         <tbody>
@@ -3775,7 +3776,11 @@ export default function TransferDesk() {
                                         {allProjects.filter((pr) => !offProject(pr) || pr === (asAlloc(e.base)[0] || {}).project).map((pr) => <option key={pr} value={pr}>{pr}</option>)}
                                       </select>}
                                 </td>
-                                <td>{n ? <button className="link" onClick={() => setCardId(e.id)}>{n} — історія</button> : <span style={{ color: C.muted }}>—</span>}</td>
+                                <td>{n ? <button className="link" onClick={() => setCardId(e.id)}>{n} — історія</button> : <button className="link" style={{ color: C.muted }} onClick={() => setCardId(e.id)}>картка</button>}</td>
+                                <td style={{ textAlign: "center" }}>
+                                  <input type="checkbox" checked={!!e.partTime} disabled={!isAdmin} style={{ width: "auto" }} aria-label={"Парттайм: " + e.name}
+                                    onChange={(ev) => { setEmp(e.id, { partTime: ev.target.checked }); pushLog(ev.target.checked ? "позначив парттайм" : "зняв позначку парттайм", e.name); }} />
+                                </td>
                                 <td>{isAdmin && <button className="del" onClick={() => removeEmployee(e.id)} title="Прибрати з довідника" aria-label={"Прибрати " + e.name}>✕</button>}</td>
                               </tr>
                             );
