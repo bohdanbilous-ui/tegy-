@@ -156,13 +156,12 @@ function guardHrd(stored, inc, me) {
    Решта (переведення, проєкти, команди, табель, налаштування) береться з сервера. Повертає текст помилки або null. */
 const ACC_EMP_KEYS = ["name", "position", "extId", "location", "teamId", "teamAlloc", "teamHist", "base"];
 const ACC_PAY_KEYS = ["payLegal", "payType", "payFixed", "payLike", "payOff", "fileFixed", "fileType", "payFio", "fileFio"];
-const BENCH = "Бенч"; // системний проєкт за замовчуванням: його не треба додавати в довідник
 const baseProjects = (b) => asAlloc(b).map((x) => x.project).filter(Boolean);
 
 function guardAccountant(stored, inc, me) {
   const tomb = stored.deleted || {};
   // Відомі проєкти — як allProjects у браузері: довідник + ті, що вже трапляються в людях і переведеннях.
-  const projects = new Set([...(stored.projects || []), BENCH]);
+  const projects = new Set([...(stored.projects || [])]);
   (stored.employees || []).forEach((e) => baseProjects(e.base).forEach((p) => projects.add(p)));
   (stored.transfers || []).forEach((t) => [...asAlloc(t.from), ...asAlloc(t.to)].forEach((x) => x.project && projects.add(x.project)));
   const teamIds = new Set((stored.teams || []).map((t) => t.id));
@@ -195,7 +194,7 @@ function guardAccountant(stored, inc, me) {
     if (eStored.has(n.id) || tomb["e:" + n.id]) continue;
     const e = { id: n.id, updatedAt: n.updatedAt || nowISO() };
     ACC_EMP_KEYS.concat(ACC_PAY_KEYS).forEach((k) => { if (k in n) e[k] = n[k]; });
-    if (!e.base) e.base = BENCH;
+    if (!e.base) e.base = ""; // без проєкту — «не розподілено»
     const why = checkEmp(e);
     if (why) return why;
     employees.push(e); touched.add(e.id);

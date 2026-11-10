@@ -4,7 +4,7 @@ import Info from "./Info";
 import { allocAt } from "../lib/alloc";
 import { onStaff, monthlySeries, turnover12, tenure, byGroup, upcoming, addDays } from "../lib/hrmetrics";
 
-/* HR та рекрутинг: штат, найми, звільнення, плинність, стаж, бенч, мобільність.
+/* HR та рекрутинг: штат, найми, звільнення, плинність, стаж, нерозподілені, мобільність.
    Усе рахується з карток співробітників (hiredOn / leftOn з PeopleForce) і журналу переведень. */
 
 const C = { surface: "#FFFFFF", ink: "#0F172A", ink2: "#334155", muted: "#64748B", line: "#DDE3EC", lineSoft: "#EEF2F6",
@@ -41,7 +41,7 @@ export default function HrMetrics({ employees, transfers, teams, today, onOpenCa
       division: byGroup(employees, today, (e) => e.division || e.department || "Без БЮ"),
       position: byGroup(employees, today, (e) => e.position || "Без посади").slice(0, 20),
     };
-    const bench = staff.map((e) => ({ e, p: allocAt(e, transfers, today).filter((x) => x.project === "Бенч").reduce((s, x) => s + x.percent, 0) }))
+    const bench = staff.map((e) => ({ e, p: Math.max(0, 100 - allocAt(e, transfers, today).reduce((t, x) => t + x.percent, 0)) }))
       .filter((x) => x.p > 0).sort((a, b) => b.p - a.p);
     const benchFte = bench.reduce((s, x) => s + x.p / 100, 0);
     const mob = series.map((s) => ({ key: s.key, n: transfers.filter((t) => !t.cancelled && t.effectiveDate && t.effectiveDate.slice(0, 7) === s.key).length }));
@@ -63,7 +63,7 @@ export default function HrMetrics({ employees, transfers, teams, today, onOpenCa
       rows: [["Місяць", "Найми", "Звільнення", "Штат на кінець", "Баланс", "Плинність"], ...m.series.map((s) => [s.key, s.hires, s.leavers, s.headcount, s.net, Number((s.turnover * 100).toFixed(1))])] },
     ...GROUPS.map(([k, l]) => ({ name: l, freeze: 1, cols: [30, 10, 10, 12, 12],
       rows: [[l, "Штат", "Найми 12 міс", "Звільнення 12 міс", "Плинність %"], ...m.groups[k].map((g) => [g.name, g.headcount, g.hires, g.leavers, Number((g.turnover * 100).toFixed(1))])] })),
-    { name: "Бенч", freeze: 1, cols: [30, 30, 10], rows: [["Співробітник", "Посада", "% на бенчі"], ...m.bench.map((x) => [x.e.name, x.e.position || "", Math.round(x.p)])] },
+    { name: "Не розподілені", freeze: 1, cols: [30, 30, 10], rows: [["Співробітник", "Посада", "% не розподілено"], ...m.bench.map((x) => [x.e.name, x.e.position || "", Math.round(x.p)])] },
   ]);
 
   const person = (e) => (
@@ -80,7 +80,7 @@ export default function HrMetrics({ employees, transfers, teams, today, onOpenCa
         </div>
         <Info title="Як рахується">
           Штат — люди, які працюють на дату (від дати найму до останнього робочого дня). Плинність за 12 міс. — звільнені, поділені на середній штат (на початок і кінець періоду).
-          Ранній відтік — звільнені протягом 90 днів після найму. Бенч — частка людини на проєкті «Бенч» за довідником і переведеннями.
+          Ранній відтік — звільнені протягом 90 днів після найму. Не розподілені — частка 100%, яка не закрита проєктами за довідником і переведеннями.
           Дати найму й звільнення приходять з PeopleForce; давно звільнених (до першої синхронізації) тут немає, тому історія надійна лише з моменту підключення.
         </Info>
         {m.ten.noHire > 0 && (
@@ -175,9 +175,9 @@ export default function HrMetrics({ employees, transfers, teams, today, onOpenCa
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
         <section style={{ ...card, padding: "16px 20px" }}>
-          <h3 style={{ margin: "0 0 4px", fontSize: 15, fontWeight: 600 }}>Бенч — вільна потужність</h3>
+          <h3 style={{ margin: "0 0 4px", fontSize: 15, fontWeight: 600 }}>Не розподілені</h3>
           <div style={{ color: C.muted, fontSize: 12.5, marginBottom: 8 }}>
-            {m.bench.length ? m.bench.length + " " + plural(m.bench.length, "людина", "людини", "людей") + " · " + r1(m.benchFte) + " ставки. Перш ніж відкривати вакансію, перевірте, чи не закриє її хтось із бенчу." : "Зараз нікого на бенчі."}
+            {m.bench.length ? m.bench.length + " " + plural(m.bench.length, "людина", "людини", "людей") + " · " + r1(m.benchFte) + " ставки. Спершу розподіліть їх, а вже потім відкривайте вакансії." : "Усі розподілені."}
           </div>
           {m.bench.slice(0, 12).map((x) => (
             <div key={x.e.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "5px 0", borderTop: "1px solid " + C.lineSoft, fontSize: 13 }}>

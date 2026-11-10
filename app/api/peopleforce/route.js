@@ -123,7 +123,7 @@ async function decide(body, me) {
   // Новий розподіл: проєкти з довідника, відсотки > 0, разом рівно 100.
   let alloc = null;
   if (Array.isArray(body.alloc) && body.alloc.length) {
-    const known = new Set([...(state.projects || []).filter((p) => !tomb["p:" + p]), "Бенч",
+    const known = new Set([...(state.projects || []).filter((p) => !tomb["p:" + p]),
       ...(state.employees || []).flatMap((e) => asAlloc(e.base).map((r) => r.project)),
       ...transfers.flatMap((t) => [...t.from, ...t.to].map((r) => r.project))]);
     alloc = [];

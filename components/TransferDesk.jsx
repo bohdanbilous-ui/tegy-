@@ -72,7 +72,10 @@ const uid = (p) => p + Date.now().toString(36) + Math.random().toString(36).slic
 const round2 = (n) => String(Number(n.toFixed(2)));
 const plural = (n, a, b, c) => { const m = n % 100; if (m > 10 && m < 20) return c; const k = n % 10; return k === 1 ? a : k > 1 && k < 5 ? b : c; };
 
-const asAlloc = (v) => (typeof v === "string" ? [{ project: v, percent: 100 }] : (v || []).map((x) => ({ project: x.project, percent: Number(x.percent) || 0 })));
+// Проєкту «Бенч» більше немає: старі записи з ним читаємо як «не розподілено» (порожній розподіл).
+const LEGACY_BENCH = "Бенч";
+const asAlloc = (v) => (typeof v === "string" ? (v && v !== LEGACY_BENCH ? [{ project: v, percent: 100 }] : [])
+  : (v || []).map((x) => ({ project: x.project, percent: Number(x.percent) || 0 })).filter((x) => x.project !== LEGACY_BENCH));
 const allocText = (a) => (!a || !a.length ? "—" : asAlloc(a).map((x) => (x.percent === 100 ? x.project : x.project + " " + round2(x.percent) + "%")).join(" + "));
 const allocMap = (a) => { const m = {}; asAlloc(a).forEach((x) => (m[x.project] = (m[x.project] || 0) + x.percent)); return m; };
 const sameAlloc = (a, b) => {
@@ -195,7 +198,7 @@ const SEED_TEAMS = ["Внутрішня автоматизація", "Марке
 
 const SEED_REASONS = [
   "Ротація за запитом команди", "Запит співробітника", "Старт нового проєкту",
-  "Завершення проєкту", "Підсилення команди", "Вихід з бенчу",
+  "Завершення проєкту", "Підсилення команди",
   "Часткова зайнятість на другому проєкті",
 ];
 const SEED_EMPLOYEES = [];
@@ -777,11 +780,11 @@ export default function TransferDesk() {
   const cardEmp = employees.find((e) => e.id === cardId);
 
   const allProjects = useMemo(() => {
-    const s = new Set(projects);
+    const s = new Set(projects.filter((p) => p !== "Бенч"));
     employees.forEach((e) => asAlloc(e.base).forEach((x) => x.project && s.add(x.project)));
     transfers.forEach((t) => [...asAlloc(t.from), ...asAlloc(t.to)].forEach((x) => x.project && s.add(x.project)));
     // Порядок — як у довіднику проєктів (його задає адміністратор стрілками).
-    return orderProjects([...projects, ...Array.from(s).filter((p) => !projects.includes(p)).sort((a, b) => a.localeCompare(b, "uk"))], projectMeta);
+    return orderProjects([...projects.filter((p) => p !== "Бенч"), ...Array.from(s).filter((p) => !projects.includes(p)).sort((a, b) => a.localeCompare(b, "uk"))], projectMeta);
   }, [projects, employees, transfers, projectMeta]);
   const offProject = (p) => isInactive(projectMeta, p);
   const activeProjects = allProjects.filter((p) => !offProject(p));
@@ -1909,12 +1912,12 @@ export default function TransferDesk() {
     const n = newEmp.trim();
     if (!n) return setListNote("Впишіть ім'я співробітника.");
     if (employees.some((e) => String(e.name || "").trim().toLowerCase() === n.toLowerCase())) return setListNote("Такий співробітник уже є у списку.");
-    const pr = (newEmpProject || "").trim() || "Бенч";
-    if (!isAdmin && pr !== "Бенч" && !allProjects.includes(pr)) return setListNote("Проєкту «" + pr + "» немає в довіднику. Оберіть наявний — нові проєкти додає адміністратор.");
+    const pr = (newEmpProject || "").trim();
+    if (pr && !isAdmin && !allProjects.includes(pr)) return setListNote("Проєкту «" + pr + "» немає в довіднику. Оберіть наявний — нові проєкти додає адміністратор.");
     setEmployees((p) => [...p, { id: uid("e"), name: n, position: newEmpPosition.trim(), base: pr, updatedAt: nowISO() }]);
-    if (!allProjects.includes(pr)) { setProjects((x) => [...x, pr]); untomb("p:" + pr); }
+    if (pr && !allProjects.includes(pr)) { setProjects((x) => [...x, pr]); untomb("p:" + pr); }
     setNewEmp(""); setNewEmpPosition("");
-    setListNote(n + " доданий(а) на проєкт «" + pr + "».");
+    setListNote(n + (pr ? " доданий(а) на проєкт «" + pr + "»." : " доданий(а) без проєкту — не розподілено."));
     pushLog("додав співробітника", n);
   }
   function renameEmployee(id, name) {
@@ -2058,7 +2061,7 @@ export default function TransferDesk() {
           const c = parsed.candidates.find((x) => RE.location.test(x.head)) || parsed.candidates[0];
           return c ? String(c.i) : "";
         })(),
-        fallback: allProjects.includes("Бенч") ? "Бенч" : (allProjects[0] || "Бенч"),
+        fallback: "",
         projects: parseSimpleList(rowsOf(pick(["проєкт", "проект", "project"]))),
         partners: parseSimpleList(rowsOf(pick(["partner", "партнер"]))),
       });
@@ -2069,14 +2072,15 @@ export default function TransferDesk() {
   const resolveImport = (p) => p.list.map((x) => {
     if (x.alloc) return { ...x, alloc: x.alloc };
     const fromCol = p.projectCol !== "" ? norm(x.raw[p.projectCol]) : "";
-    return { ...x, alloc: [{ project: fromCol || p.fallback || "Бенч", percent: 100 }] };
+    const pr = fromCol || p.fallback || "";
+    return { ...x, alloc: pr ? [{ project: pr, percent: 100 }] : [] };
   });
 
   function applyImport(mode) {
     if (!preview) return;
     if (mode === "replace" && !isAdmin) return denied("замінити весь список може лише адміністратор");
     if (!isAdmin) {
-      const newProj = uniq([...preview.projects, ...resolveImport(preview).flatMap((x) => asAlloc(x.alloc).map((a) => a.project))]).filter((p) => p !== "Бенч" && !allProjects.includes(p));
+      const newProj = uniq([...preview.projects, ...resolveImport(preview).flatMap((x) => asAlloc(x.alloc).map((a) => a.project))]).filter((p) => p && !allProjects.includes(p));
       if (newProj.length) return setListNote("У файлі є проєкти, яких немає в довіднику: " + newProj.slice(0, 5).join(", ") + (newProj.length > 5 ? "…" : "") + ". Нові проєкти додає адміністратор — попросіть додати їх або виправте файл.");
       const newPp = preview.partners.filter((p) => !partners.includes(p));
       if (newPp.length) return setListNote("У файлі є People Partners, яких немає в довіднику: " + newPp.slice(0, 5).join(", ") + ". Їх додає адміністратор.");
@@ -3918,6 +3922,7 @@ export default function TransferDesk() {
                                     : <select value={asAlloc(e.base)[0]?.project || ""}
                                         onChange={(ev) => setEmployees((p) => p.map((x) => x.id === e.id ? { ...x, base: ev.target.value, updatedAt: nowISO() } : x))}
                                         aria-label="Початковий проєкт" style={{ padding: "7px 9px" }}>
+                                        <option value="">— не розподілено</option>
                                         {allProjects.filter((pr) => !offProject(pr) || pr === (asAlloc(e.base)[0] || {}).project).map((pr) => <option key={pr} value={pr}>{pr}</option>)}
                                       </select>}
                                 </td>
@@ -3947,7 +3952,7 @@ export default function TransferDesk() {
                     <input type="text" value={newEmpPosition} onChange={(e) => setNewEmpPosition(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addEmployee()}
                       placeholder="Посада" aria-label="Посада нового співробітника" style={{ flex: "2 1 180px", width: "auto" }} />
                     <input type="text" list="projects" value={newEmpProject} onChange={(e) => setNewEmpProject(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addEmployee()}
-                      placeholder="Проєкт (за замовчуванням «Бенч»)" aria-label="Проєкт нового співробітника" style={{ flex: "1 1 200px", width: "auto" }} />
+                      placeholder="Проєкт (необов'язково)" aria-label="Проєкт нового співробітника" style={{ flex: "1 1 200px", width: "auto" }} />
                     <button onClick={addEmployee} style={addBtn}>Додати</button>
                   </div>
                 </section>
