@@ -179,7 +179,7 @@ export default function TeamDesk({ user, token, onSignOut }) {
   const sub = team ? (team.submitted || {})[pKey] : null;
   const locked = !!sub;
 
-  // Парттайм: запис лежить у першій половині місяця, друга читає його ж.
+  // Парттайм: запис лежить у другій половині місяця (16–кінець), перша читає його ж.
   const keyOf = (empId, key) => entryKey((data?.members || []).find((y) => y.id === empId), key);
   const partRO = (empId) => keyOf(empId, pKey) !== pKey;
   const allocOf = (list, empId, key) => ((list.find((x) => x.id === entryId(keyOf(empId, key), empId)) || {}).alloc) || [];
@@ -247,8 +247,10 @@ export default function TeamDesk({ user, token, onSignOut }) {
   async function copyPrev() {
     if (locked) return;
     const prev = periodKey(shiftPeriod(period, -1));
-    const rows = members.filter((m) => !rowTotal(m.id) && !dirtyRef.current[entryId(pKey, m.id)] && allocIn(m.id, prev).length)
-      .map((m) => rowOut(entries, m.id, prev));
+    // Парттайм подається раз на місяць: для нього «попередній» — друга половина минулого місяця.
+    const prevOf = (m) => (m.partTime ? periodKey(shiftPeriod(period, -2)) : prev);
+    const rows = members.filter((m) => !partRO(m.id) && !rowTotal(m.id) && !dirtyRef.current[entryId(pKey, m.id)] && allocIn(m.id, prevOf(m)).length)
+      .map((m) => rowOut(entries, m.id, prevOf(m)));
     if (!rows.length) return setToast("Немає що переносити: попередній період порожній або цей уже заповнений.");
     const tid = teamId, key = pKey;
     await lock();
@@ -263,7 +265,7 @@ export default function TeamDesk({ user, token, onSignOut }) {
   }
 
   async function submitPeriod() {
-    const bad = members.filter((m) => Math.abs(rowTotal(m.id) - 100) > 0.01);
+    const bad = members.filter((m) => !partRO(m.id) && Math.abs(rowTotal(m.id) - 100) > 0.01);
     if (bad.length) return setToast("Не подамо: у " + bad.length + " " + plural(bad.length, "людини", "людей", "людей") + " сума не 100%.");
     if (!window.confirm("Подати період «" + periodLabel(period) + "» для команди «" + team.name + "»? Після подання змінити відсотки зможе лише адміністратор.")) return;
     const tid = teamId, key = pKey, name = team.name, label = periodLabel(period);
@@ -451,7 +453,7 @@ export default function TeamDesk({ user, token, onSignOut }) {
                               <td style={{ position: "sticky", left: 0, background: C.surface }}>
                                 <div style={{ fontWeight: 600 }}>{m.name}</div>
                                 {m.position && <div style={{ color: C.muted, fontSize: 11.5 }}>{m.position}</div>}
-                                {m.partTime && <div style={{ color: C.plan, fontSize: 11.5 }}>{partRO(m.id) ? "парттайм · взято з 01–15, на весь місяць" : "парттайм · одне подання на весь місяць"}</div>}
+                                {m.partTime && <div style={{ color: C.plan, fontSize: 11.5 }}>{partRO(m.id) ? "парттайм · вноситься в періоді 16–кінець місяця, на весь місяць" : "парттайм · одне подання на весь місяць"}</div>}
                               </td>
                               {cols.map((c) => (
                                 <td key={c} style={{ padding: 4 }}>

@@ -4,7 +4,7 @@ import { whoIs } from "../../../lib/auth";
 import { sameName } from "../../../lib/users";
 import { cleanHours, hoursToAlloc } from "../../../lib/hours";
 import { orderProjects, isInactive } from "../../../lib/projects";
-import { entryKey, isPartTime } from "../../../lib/people";
+import { entryKey, isDeferred, isPartTime } from "../../../lib/people";
 
 export const dynamic = "force-dynamic";
 
@@ -89,7 +89,7 @@ export async function PUT(request) {
     if (!memberIds.has(r?.employeeId)) {
       return NextResponse.json({ error: "Людина не належить до команди «" + team.name + "»." }, { status: 403 });
     }
-    // Парттайм подається раз на місяць у періоді 01–15: у другій половині його рядок не приймаємо.
+    // Парттайм подається раз на місяць у періоді 16–кінець місяця: у першій половині його рядок не приймаємо.
     if (entryKey(members.find((e) => e.id === r.employeeId), periodKey) !== periodKey) continue;
     if (Array.isArray(r.hours) && r.hours.length) {
       const hours = cleanHours(r.hours);
@@ -124,8 +124,8 @@ export async function PUT(request) {
   };
 
   if (body.submit) {
-    const bad = members.filter((e) => {
-      const x = entries.find((y) => y.id === entryId(entryKey(e, periodKey), e.id));
+    const bad = members.filter((e) => !isDeferred(e, periodKey)).filter((e) => {
+      const x = entries.find((y) => y.id === entryId(periodKey, e.id));
       return Math.abs(total(x && x.alloc) - 100) > 0.01;
     });
     if (bad.length) {

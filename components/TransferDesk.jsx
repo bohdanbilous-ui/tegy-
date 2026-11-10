@@ -993,7 +993,7 @@ export default function TransferDesk() {
   const teamMembers = (id) => employees.filter((e) => inTeamOn(e, id, periodStart(period)));
   const pKey = periodKey(period.y, period.m, period.half);
   const entryId = (empId, key) => "en_" + key + "_" + empId;
-  // Парттайм: запис лежить у першій половині місяця, друга половина читає його ж.
+  // Парттайм: запис лежить у другій половині місяця (16–кінець), перша половина читає його ж.
   const empById = useMemo(() => new Map(employees.map((e) => [e.id, e])), [employees]);
   const entryOf = (empId, key) => entries.find((x) => x.id === entryId(empId, entryKey(empById.get(empId), key)));
   const partRO = (empId) => entryKey(empById.get(empId), pKey) !== pKey;
@@ -1089,8 +1089,11 @@ export default function TransferDesk() {
     const prev = periodKey(...(() => { const x = shiftPeriod(period, -1); return [x.y, x.m, x.half]; })());
     const add = [];
     teamMembers(t.id).forEach((e) => {
-      const src = allocIn(e.id, prev);
-      const srcH = hoursIn(e.id, prev);
+      if (partRO(e.id)) return;
+      // Парттайм подається раз на місяць: для нього «попередній» — друга половина минулого місяця.
+      const pk = e.partTime ? periodKey(...(() => { const x = shiftPeriod(period, -2); return [x.y, x.m, x.half]; })()) : prev;
+      const src = allocIn(e.id, pk);
+      const srcH = hoursIn(e.id, pk);
       if (src.length && !rowTotal(e.id)) add.push({ id: entryId(e.id, pKey), periodKey: pKey, employeeId: e.id, alloc: src.map((r) => ({ ...r })),
         ...(srcH.length ? { hours: srcH.map((h) => ({ ...h })) } : {}), updatedAt: nowISO(), updatedBy: user ? user.name : "" });
     });
@@ -1101,7 +1104,7 @@ export default function TransferDesk() {
   }
   function submitPeriod(t) {
     if (!canEditTeam(t)) return denied("подавати період команди «" + t.name + "»");
-    const bad = teamMembers(t.id).filter((e) => rowTotal(e.id) !== 100);
+    const bad = teamMembers(t.id).filter((e) => !partRO(e.id) && rowTotal(e.id) !== 100);
     if (bad.length) return setToast("Не подамо: у " + bad.length + " " + plural(bad.length, "людини", "людей", "людей") + " сума не 100%.");
     editTeam(t.id, (x) => ({ ...x, submitted: { ...(x.submitted || {}), [pKey]: { by: user.name, at: nowISO() } } }));
     pushLog("подав період", t.name + " · " + periodLabel(period));
@@ -2921,7 +2924,7 @@ export default function TransferDesk() {
                                 <td style={{ position: "sticky", left: 0, background: C.surface }}>
                                   <button className="link" style={{ color: C.ink, textDecoration: "none", fontWeight: 600 }} onClick={() => setCardId(e.id)}>{e.name}</button>
                                   {e.position && <div style={{ color: C.muted, fontSize: 11.5 }}>{e.position}</div>}
-                                  {e.partTime && <div style={{ color: C.plan, fontSize: 11.5 }}>{partRO(e.id) ? "парттайм · взято з 01–15, на весь місяць" : "парттайм · одне подання на весь місяць"}</div>}
+                                  {e.partTime && <div style={{ color: C.plan, fontSize: 11.5 }}>{partRO(e.id) ? "парттайм · вноситься в періоді 16–кінець місяця, на весь місяць" : "парттайм · одне подання на весь місяць"}</div>}
                                   {off && (
                                     <div style={{ color: C.plan, fontSize: 11.5, marginTop: 2 }}>
                                       переведення з {mv.map((t) => fmt(t.effectiveDate > periodStart(period) ? t.effectiveDate : t.returnDate).slice(0, 5)).join(", ")}: {tagOf(want, codes)}
@@ -4044,10 +4047,10 @@ export default function TransferDesk() {
                     {((cardEmp.teamAlloc || []).length ? tagOf(cardEmp.teamAlloc, codes) : tagOf(now, codes)) || ""}
                   </p>
                   <label style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10, fontSize: 13, color: C.ink2, cursor: isAdmin ? "pointer" : "default" }}
-                    title="Розподіл такої людини подається один раз на місяць у періоді 01–15, а друга половина бере його ж.">
+                    title="Розподіл такої людини подається один раз на місяць у періоді 16–кінець місяця, а перша половина бере його ж.">
                     <input type="checkbox" checked={!!cardEmp.partTime} disabled={!isAdmin} style={{ width: "auto" }}
                       onChange={(ev) => { setEmp(cardEmp.id, { partTime: ev.target.checked }); pushLog(ev.target.checked ? "позначив парттайм" : "зняв позначку парттайм", cardEmp.name); }} />
-                    Парттайм — розподіл подається раз на місяць (у періоді 01–15)
+                    Парттайм — розподіл подається раз на місяць (у періоді 16–кінець місяця)
                   </label>
                 </div>
                 <button className="del" onClick={() => setCardId(null)} aria-label="Закрити">✕</button>
