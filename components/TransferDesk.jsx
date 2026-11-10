@@ -3647,10 +3647,10 @@ export default function TransferDesk() {
                     <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
                       <div style={{ flex: "1 1 320px" }}>
                         <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>PeopleForce</h2>
-                        <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>
+                        <Info>
                           Щоночі (близько 03:00 за Києвом) лише читає PeopleForce: додає нових людей і оновлює статус «працює / звільнений». Ім'я, посаду, команди, розподіл і переведення наявних людей сама не змінює.
                           Якщо в PeopleForce змінилась посада чи БЮ — зміна з'являється нижче й чекає на ваше підтвердження. Звільнені зникають зі списків, але їхня історія лишається.
-                        </p>
+                        </Info>
                       </div>
                       {pf && pf.configured && (
                         <button style={addBtn} disabled={pfBusy} onClick={syncPf}>{pfBusy ? "Синхронізую…" : "Синхронізувати зараз"}</button>
@@ -3699,10 +3699,10 @@ export default function TransferDesk() {
                   <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
                     <div style={{ flex: "1 1 320px" }}>
                       <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>Заливка списку</h2>
-                      <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>
+                      <Info>
                         Перетягніть сюди Excel або CSV чи оберіть файл. Колонки розпізнаються за шапкою: ім'я одним стовпчиком
                         або «Ім'я» + «Прізвище», а також ідентифікатор, посада, проєкт і відсоток.
-                      </p>
+                      </Info>
                     </div>
                     <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                       <button className="ghost" onClick={() => buildTemplate(allProjects, partners)}>Шаблон</button>
@@ -3748,10 +3748,10 @@ export default function TransferDesk() {
                         </div>
                       )}
 
-                      <p style={{ margin: "10px 0 0", color: C.muted, fontSize: 12.5 }}>
+                      <Info>
                         Вийде так: {resolveImport(preview).slice(0, 3).map((x) => x.name + (x.position ? " (" + x.position + ")" : "") + " — " + allocText(x.alloc)).join(" · ")}
                         {preview.list.length > 3 ? " …" : ""}
-                      </p>
+                      </Info>
 
                       <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap", alignItems: "center" }}>
                         <button style={addBtn} onClick={() => applyImport("merge")}>Додати до довідника</button>
@@ -3876,11 +3876,11 @@ export default function TransferDesk() {
               <section style={{ ...card, overflow: "hidden" }}>
                 <div style={{ padding: "16px 18px", borderBottom: "1px solid " + C.lineSoft }}>
                   <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>Проєкти</h2>
-                  <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>
+                  <Info>
                     Порядок у таблиці задає порядок колонок у табелі, фін. обліку, звітах і списках вибору. Неактивний проєкт
                     зникає з вибору для нових переведень, з Google Форми й з колонок табеля, але лишається в історії та звітах.
                     Код потрібен для тегів на кшталт cbx-47,cbx_pos-13,grp-40.
-                  </p>
+                  </Info>
                   <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
                     <button className="ghost" onClick={suggestCodes}>Підказати коди за назвами</button>
                     <span style={{ color: C.muted, fontSize: 12.5 }}>Доступні: {CODES.join(", ")}</span>
@@ -4004,11 +4004,11 @@ export default function TransferDesk() {
                   <button onClick={addTeam} style={addBtn}>Додати команду</button>
                 </div>
 
-                <p style={{ color: C.muted, fontSize: 12.5, marginTop: 24 }}>
+                <Info style={{ marginTop: 24 }}>
                   PM призначаються у вкладці «Проєкти». На проєкті може бути кілька PM — впишіть імена через «;» (наприклад, «Іваненко Іван; Петренко Петро»):
                   погодити переведення чи підтвердити години може будь-хто з них. Проєкт без PM нікому погоджувати — такі записи підсвічуються в «Погодженні».
                   {allProjects.filter((x) => !pmList(pms[x]).length).length > 0 && " Зараз без PM: " + allProjects.filter((x) => !pmList(pms[x]).length).length + "."}
-                </p>
+                </Info>
               </section>
             )}
 
@@ -4016,9 +4016,9 @@ export default function TransferDesk() {
               <section style={{ ...card, overflow: "hidden" }}>
                 <div style={{ padding: "16px 18px", borderBottom: "1px solid " + C.lineSoft }}>
                   <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>People Partners</h2>
-                  <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>
+                  <Info>
                     Список підказок для форми переведень. Це не логіни — керування обліковими записами й ролями тепер у вкладці «Користувачі».
-                  </p>
+                  </Info>
                 </div>
                 {partners.length === 0 ? (
                   <p style={{ padding: "36px 20px", margin: 0, color: C.muted, textAlign: "center" }}>Поки що нікого. Додайте тих, хто подає переведення.</p>
@@ -4050,9 +4050,9 @@ export default function TransferDesk() {
               <section style={{ ...card, overflow: "hidden" }}>
                 <div style={{ padding: "16px 18px", borderBottom: "1px solid " + C.lineSoft }}>
                   <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>Підстави переведення</h2>
-                  <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>
+                  <Info>
                     Підказки у формі й розбивка у звіті. Нова підстава, вписана у форму, потрапляє сюди сама.
-                  </p>
+                  </Info>
                 </div>
                 <div style={{ overflowX: "auto" }}>
                   <table>

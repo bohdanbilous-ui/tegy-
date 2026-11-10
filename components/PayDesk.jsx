@@ -9,6 +9,7 @@
    FPV — окремий довідник людей поза PeopleForce; за замовчуванням fpv-100. */
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
+import Info from "./Info";
 
 const C = {
   paper: "#F5F7FB", surface: "#FFFFFF", ink: "#0F172A", ink2: "#334155",
@@ -355,11 +356,11 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
             {busy ? "Записую…" : "У Google Таблицю"}
           </button>
         </div>
-        <p style={{ margin: "10px 0 0", color: C.muted, fontSize: 12.5 }}>
+        <Info>
           Теги Штату — за {spanText(staffSpan)}, Гігу — за {spanText(gigSpan)}. Розподіл: «тег як у …» → табель / звіт годин / коригування → фіксований → довідник.
           Юрособа, Штат/Гіг і ІПН задаються тут (або імпортом з таблиці «Теги ЗП»); ПІБ повністю приходить із PeopleForce.
           {onOpenBook && <> Довідники: <button className="link" onClick={() => onOpenBook("legal")}>юрособи</button>, <button className="link" onClick={() => onOpenBook("fpv")}>FPV та імпорт</button>.</>}
-        </p>
+        </Info>
         {!sheetReady && (
           <p style={{ margin: "10px 0 0", background: C.warnSoft, borderRadius: 8, padding: "10px 14px", color: C.ink2, fontSize: 12.5 }}>
             Google Таблицю не підключено: встановіть скрипт з <b>apps-script/vidomosti.gs</b> у таблицю відомостей і задайте у Vercel <b>PAY_SHEET_URL</b>, потім Redeploy.

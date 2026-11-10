@@ -1,5 +1,6 @@
 "use client";
 import React, { useState, useEffect, useRef } from "react";
+import Info from "./Info";
 
 /* Нагадування відповідальним про табель (лише адміністратор).
    Текст і Slack ID зберігаються на сервері; «Надіслати» ставить повідомлення в чергу,
@@ -24,6 +25,8 @@ export default function Reminders({ getToken, onToast }) {
   const [pick, setPick] = useState({});
   const [pmPick, setPmPick] = useState({});
   const [busy, setBusy] = useState(false);
+  const [showText, setShowText] = useState(false);
+  const [showSample, setShowSample] = useState(false);
   const [err, setErr] = useState("");
   const dirty = useRef(false);
 
@@ -135,10 +138,10 @@ export default function Reminders({ getToken, onToast }) {
             </tbody>
           </table>
         </div>
-        <p style={{ margin: "8px 0 0", color: C.muted, fontSize: 12.5 }}>
+        <Info>
           Надсилаємо лише тим, чия команда ще не подала період. Slack ID — у профілі людини в Slack: «⋯» → «Копіювати ID учасника».
           {owners.some((o) => !slack[o]) ? " Без Slack ID людині не надішлемо." : ""}
-        </p>
+        </Info>
       </section>
 
       <section style={{ ...card, padding: 20 }}>
@@ -149,9 +152,9 @@ export default function Reminders({ getToken, onToast }) {
             автоматично у будні о 10:00, якщо щось чекає
           </label>
         </div>
-        <p style={{ margin: "6px 0 10px", color: C.muted, fontSize: 12.5 }}>
+        <Info style={{ margin: "6px 0 10px" }}>
           PM отримує одне повідомлення зі списком: запити на його людей, переведення на погодження, факт годин (внести / підтвердити). Хто нічого не має робити — не отримує. Slack ID той самий, що вище: впишіть його й натисніть «Зберегти» нижче.
-        </p>
+        </Info>
         {(d.pmTargets || []).length ? (
           <div style={{ overflowX: "auto" }}>
             <table>
@@ -176,12 +179,21 @@ export default function Reminders({ getToken, onToast }) {
           <button className="ghost" disabled={busy} onClick={save}>Зберегти Slack ID</button>
         </div>
         {(d.pmTargets || [])[0] && (
-          <pre style={{ margin: "12px 0 0", whiteSpace: "pre-wrap", font: "inherit", fontSize: 13.5, background: "#F8FAFC", border: "1px solid " + C.lineSoft, borderRadius: 8, padding: "12px 14px" }}>{d.pmTargets[0].text}</pre>
+          <button className="link" aria-expanded={showSample} onClick={() => setShowSample((v) => !v)} style={{ display: "block", marginTop: 10, fontSize: 12.5, color: C.muted, textDecoration: "none" }}>
+            Приклад повідомлення {showSample ? "▴" : "▾"}
+          </button>
+        )}
+        {showSample && (d.pmTargets || [])[0] && (
+          <pre style={{ margin: "8px 0 0", whiteSpace: "pre-wrap", font: "inherit", fontSize: 13.5, background: "#F8FAFC", border: "1px solid " + C.lineSoft, borderRadius: 8, padding: "12px 14px" }}>{d.pmTargets[0].text}</pre>
         )}
       </section>
 
       <section style={{ ...card, padding: 20 }}>
-        <h3 style={{ margin: 0, fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>Текст повідомлення</h3>
+        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+          <h3 style={{ margin: 0, fontFamily: SERIF, fontSize: 17, fontWeight: 600 }}>Текст повідомлення</h3>
+          <button className="ghost" aria-expanded={showText} onClick={() => setShowText((v) => !v)} style={{ marginLeft: "auto" }}>{showText ? "Згорнути" : "Редагувати"}</button>
+        </div>
+        {showText && (<>
         <p style={{ margin: "4px 0 10px", color: C.muted, fontSize: 12.5 }}>
           Підстановки: {VARS.map((v) => (
             <button key={v} className="link" style={{ marginRight: 8, fontSize: 12.5 }} onClick={() => { dirty.current = true; setText((t) => t + v); }}>{v}</button>
@@ -200,6 +212,7 @@ export default function Reminders({ getToken, onToast }) {
             <pre style={{ margin: 0, whiteSpace: "pre-wrap", font: "inherit", fontSize: 13.5, background: "#F8FAFC", border: "1px solid " + C.lineSoft, borderRadius: 8, padding: "12px 14px" }}>{preview}</pre>
           </div>
         )}
+        </>)}
       </section>
 
       <section style={{ ...card, padding: 20 }}>
