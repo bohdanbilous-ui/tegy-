@@ -62,7 +62,15 @@ async function call(token, method, body) {
 
 export default function PmDesk({ user, token, onSignOut, onApiError }) {
   const [data, setData] = useState(null);
-  const [tab, setTab] = useState("home");
+  const TAB_KEYS = ["home", "approve", "people", "loans", "confirm", "request", "history"];
+  const [tab, setTabState] = useState("home");
+  // Розділ у адресі (#approve): оновлення сторінки й «назад» не кидають на головну.
+  useEffect(() => {
+    const fromHash = () => { const h = String(window.location.hash || "").replace("#", ""); if (TAB_KEYS.includes(h)) setTabState(h); };
+    fromHash(); window.addEventListener("hashchange", fromHash);
+    return () => window.removeEventListener("hashchange", fromHash);
+  }, []);
+  const setTab = (k) => { setTabState(k); try { window.history.replaceState(null, "", "#" + k); } catch {} if (typeof window !== "undefined") window.scrollTo({ top: 0 }); };
   const [toast, setToast] = useState(null);
   const [busy, setBusy] = useState(false);
   const [notes, setNotes] = useState({});
@@ -125,7 +133,7 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
     .pm input[type=text], .pm input[type=number], .pm input[type=date], .pm select, .pm textarea { border: 1px solid ${C.line}; border-radius: 8px; padding: 7px 9px; background: #fff; min-height: 36px; }
     .pm :focus-visible { outline: 2px solid ${C.signal}; outline-offset: 2px; border-radius: 6px; }
     .pm table { border-collapse: separate; border-spacing: 0; width: 100%; }
-    .pm th, .pm td { text-align: left; padding: 10px 14px; vertical-align: top; }
+    .pm th, .pm td { text-align: left; padding: 8px 12px; vertical-align: top; }
     .pm th { font-size: 11.5px; font-weight: 600; color: ${C.muted}; text-transform: uppercase; letter-spacing: .04em; background: #F8FAFC; border-bottom: 1px solid ${C.line}; }
     .pm td { border-bottom: 1px solid ${C.lineSoft}; font-size: 13.5px; }
     .pm .num { font-variant-numeric: tabular-nums; }
@@ -135,8 +143,12 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
     .pm .link:hover { text-decoration: underline; }
     .pm .bar { background: #0B1733; color: #C7D2E4; }
     .pm .logo { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; font-weight: 700; color: #fff; background: linear-gradient(135deg, #3B82F6, #1D4ED8); }
-    .pm .tabs { display: flex; gap: 4px; flex-wrap: wrap; }
-    .pm .tab { cursor: pointer; border: none; background: transparent; padding: 9px 14px; border-radius: 8px; color: ${C.ink2}; }
+    .pm .navwrap { position: sticky; top: 0; z-index: 20; }
+    .pm .tabs { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+    .pm .tabs::-webkit-scrollbar { display: none; }
+    .pm .tab { cursor: pointer; border: none; background: transparent; padding: 8px 12px; border-radius: 8px; color: ${C.ink2}; white-space: nowrap; flex: 0 0 auto; }
+    .pm .tab:hover:not(.on) { background: #F1F5F9; }
+    .pm .qrow { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 8px 12px; border: 1px solid ${C.line}; border-radius: 8px; }
     .pm .tab.on { background: ${C.ink}; color: #fff; font-weight: 600; }
     .pm .badge { background: ${C.warn}; color: #fff; border-radius: 999px; padding: 0 7px; font-size: 11.5px; margin-left: 6px; }
     .pm .scroll { overflow-x: auto; }
@@ -147,10 +159,10 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
   const TABS = [
     ["home", "Що зробити", todoTotal],
     ["approve", "Погодження", pendingApprovals.length + incomingPending.length],
-    ["people", "Люди проєктів", 0],
-    ["loans", "Факт по переведеннях", data ? data.todo.length : 0],
-    ["confirm", "Підтвердити години", toConfirm.length],
-    ["request", "Заявка на переведення", 0],
+    ["people", "Люди", 0],
+    ["loans", "Внести факт", data ? data.todo.length : 0],
+    ["confirm", "Години колег", toConfirm.length],
+    ["request", "Нова заявка", 0],
     ["history", "Історія рішень", 0],
   ];
 
@@ -171,7 +183,7 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
         </div>
       </header>
 
-      <main style={{ maxWidth: 1200, margin: "0 auto", padding: 24, display: "grid", gap: 18 }}>
+      <main style={{ maxWidth: 1200, margin: "0 auto", padding: 18, display: "grid", gap: 12 }}>
         {!data && <section style={{ ...card, padding: 30, color: C.muted }}>Завантажуємо…</section>}
 
         {data && !data.myProjects.length && !isAdmin && (
@@ -185,7 +197,7 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
         )}
 
         {data && (
-          <section style={{ ...card, padding: 6 }}>
+          <section className="navwrap" style={{ ...card, padding: 4 }}>
             <nav className="tabs" aria-label="Розділи">
               {TABS.map(([k, l, n]) => (
                 <button key={k} className={"tab" + (tab === k ? " on" : "")} aria-current={tab === k} onClick={() => setTab(k)}>
@@ -199,7 +211,10 @@ export default function PmDesk({ user, token, onSignOut, onApiError }) {
         {data && tab === "home" && (
           <Home data={data} card={card} go={setTab} isAdmin={isAdmin} busy={busy} act={act}
             overdue={{ facts: data.todo.filter((x) => dueOf(x.periodKey) < data.today).length, approve: pendingApprovals.filter((t) => t.effectiveDate < data.today).length }}
-            counts={{ approve: pendingApprovals.length, incoming: incomingPending.length, facts: data.todo.length, confirm: toConfirm.length }} />
+            counts={{ approve: pendingApprovals.length, incoming: incomingPending.length, facts: data.todo.length, confirm: toConfirm.length }}
+            quick={pendingApprovals.slice(0, 5)} mine={mine}
+            onApproveOne={(t) => runBulk(t.approvals.filter((a) => mine.has(a.project) && a.status === "pending")
+              .map((a) => ({ action: "decide", transferId: t.id, project: a.project, ok: true, comment: "" })), "Погоджено")} />
         )}
         {data && tab === "approve" && <Approvals data={data} mine={mine} notes={notes} setNotes={setNotes} busy={busy} act={act} card={card}
           onApproveAll={() => bulk(approveReqs, "Погодити переведень", "Погоджено")} onApproveAllReq={() => bulk(incomingReqs, "Погодити запитів на ваших людей", "Погоджено")}
@@ -252,7 +267,7 @@ function Deputy({ data, busy, act }) {
 }
 
 /* ── головна: що робити зараз ── */
-function Home({ data, card, go, counts, overdue, isAdmin, busy, act }) {
+function Home({ data, card, go, counts, overdue, isAdmin, busy, act, quick, mine, onApproveOne }) {
   const items = [
     ["approve", counts.approve, "Переведення чекають на ваше погодження", "Погоджуєте вже доконане переведення: ваша людина йде або приходить до проєкту.", overdue.approve ? overdue.approve + " уже діють" : ""],
     ["approve", counts.incoming, "Запити на людей з ваших проєктів", "Інший PM просить вашу людину. Ваше слово бачить адміністратор.", ""],
@@ -268,7 +283,7 @@ function Home({ data, card, go, counts, overdue, isAdmin, busy, act }) {
         Ви заступаєте {data.deputy.covering.map((d) => d.pm + " до " + fmt(d.to)).join("; ")}: їхні проєкти додані до ваших.
       </section>
     )}
-    <section style={{ ...card, padding: 20, display: "grid", gap: 14 }}>
+    <section style={{ ...card, padding: 16, display: "grid", gap: 12 }}>
       <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
         <h2 style={{ margin: 0, fontSize: 17 }}>{open.length ? "Що потрібно зробити" : "Усе зроблено ✓"}</h2>
         <span style={{ color: C.muted, fontSize: 13 }}>{data.myProjects.length ? "Ваші проєкти: " + data.myProjects.join(", ") : isAdmin ? "Режим адміністратора" : ""}</span>
@@ -276,8 +291,8 @@ function Home({ data, card, go, counts, overdue, isAdmin, busy, act }) {
       {open.length === 0 && <p style={{ margin: 0, color: C.muted }}>Зараз від вас нічого не потрібно. Нові завдання зʼявляться тут і прийдуть у Slack.</p>}
       <div style={{ display: "grid", gap: 10 }}>
         {open.map(([tab, n, title, hint, late], i) => (
-          <button key={i} onClick={() => go(tab)} style={{ cursor: "pointer", textAlign: "left", display: "flex", gap: 14, alignItems: "center", background: late ? C.stopSoft : C.warnSoft, border: "1px solid " + (late ? "#FECACA" : "#FED7AA"), borderRadius: 10, padding: "14px 16px" }}>
-            <span className="num" style={{ fontSize: 26, fontWeight: 700, color: late ? C.stop : C.warn, minWidth: 36 }}>{n}</span>
+          <button key={i} onClick={() => go(tab)} style={{ cursor: "pointer", textAlign: "left", display: "flex", gap: 14, alignItems: "center", background: late ? C.stopSoft : C.warnSoft, border: "1px solid " + (late ? "#FECACA" : "#FED7AA"), borderRadius: 10, padding: "10px 14px" }}>
+            <span className="num" style={{ fontSize: 22, fontWeight: 700, color: late ? C.stop : C.warn, minWidth: 36 }}>{n}</span>
             <span style={{ flex: 1 }}>
               <span style={{ display: "block", fontWeight: 600 }}>{title}{late && <span style={{ color: C.stop, fontWeight: 600, fontSize: 12.5 }}> · {late}</span>}</span>
               <span style={{ display: "block", color: C.ink2, fontSize: 12.5, marginTop: 2 }}>{hint}</span>
@@ -286,6 +301,20 @@ function Home({ data, card, go, counts, overdue, isAdmin, busy, act }) {
           </button>
         ))}
       </div>
+      {quick.length > 0 && (
+        <div style={{ display: "grid", gap: 6 }}>
+          <div style={{ fontSize: 12.5, color: C.muted, fontWeight: 600 }}>Погодити одразу</div>
+          {quick.map((t) => (
+            <div key={t.id} className="qrow">
+              <b>{t.employeeName}</b>
+              <span style={{ color: C.ink2, fontSize: 13 }}>{allocText(t.from)} → {allocText(t.to)} · з {fmt(t.effectiveDate)}{t.effectiveDate < data.today ? " (вже діє)" : ""}</span>
+              <button className="ghost" disabled={busy} style={{ marginLeft: "auto" }} onClick={() => onApproveOne(t)}>Погодити</button>
+              <button className="link" onClick={() => go("approve")}>Деталі</button>
+            </div>
+          ))}
+          {counts.approve > quick.length && <button className="link" style={{ justifySelf: "start" }} onClick={() => go("approve")}>Ще {counts.approve - quick.length} у розділі «Погодження»</button>}
+        </div>
+      )}
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
         <button className="link" onClick={() => go("people")}>Люди ваших проєктів</button>
         <button className="link" onClick={() => go("request")}>Подати заявку на переведення</button>
@@ -336,7 +365,7 @@ function Approvals({ data, mine, notes, setNotes, busy, act, card, onApproveAll,
   return (
     <>
     <Incoming data={data} mine={mine} notes={notes} setNotes={setNotes} busy={busy} act={act} card={card} onApproveAll={onApproveAllReq} n={nReq} />
-    <section style={{ ...card, padding: 20, display: "grid", gap: 14 }}>
+    <section style={{ ...card, padding: 16, display: "grid", gap: 12 }}>
       <div style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
         <h2 style={{ margin: 0, fontSize: 17 }}>Переведення ваших проєктів</h2>
         {nApprove > 0 && <button className="ghost" disabled={busy} onClick={onApproveAll} style={{ marginLeft: "auto" }}>Погодити всі · {nApprove}</button>}
@@ -387,7 +416,7 @@ function Incoming({ data, mine, notes, setNotes, busy, act, card, onApproveAll, 
   const list = data.incoming || [];
   if (!list.length) return null;
   return (
-    <section style={{ ...card, padding: 20, display: "grid", gap: 14 }}>
+    <section style={{ ...card, padding: 16, display: "grid", gap: 12 }}>
       <div style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
         <h2 style={{ margin: 0, fontSize: 17 }}>Запити на людей з ваших проєктів</h2>
         {n > 0 && <button className="ghost" disabled={busy} onClick={onApproveAll} style={{ marginLeft: "auto" }}>Погодити всі · {n}</button>}
@@ -565,7 +594,7 @@ function Facts({ data, mine, isAdmin, busy, act, card }) {
   const list = data.loans.filter((l) => isAdmin || mine.has(l.project));
   return (
     <>
-      <section style={{ ...card, padding: 20, display: "grid", gap: 14 }}>
+      <section style={{ ...card, padding: 16, display: "grid", gap: 12 }}>
         <div>
           <h2 style={{ margin: 0, fontSize: 17 }}>Потрібно внести факт {data.todo.length > 0 && <span style={{ color: C.warn }}>· {data.todo.length}</span>}</h2>
           <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>
@@ -743,7 +772,7 @@ function Request({ data, busy, act, card, addBtn, label }) {
   };
   return (
     <>
-      <section style={{ ...card, padding: 20, display: "grid", gap: 14 }}>
+      <section style={{ ...card, padding: 16, display: "grid", gap: 12 }}>
         <div>
           <h2 style={{ margin: 0, fontSize: 17 }}>Заявка на переведення</h2>
           <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>Спершу заявку погоджує PM проєкту, з якого просять людину (якщо це не ви), потім її розглядає адміністратор і створює переведення. Статус видно нижче.</p>
