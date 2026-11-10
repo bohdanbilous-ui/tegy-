@@ -9,6 +9,7 @@ import { orderProjects, isInactive } from "../lib/projects";
 import { applyLoans, confirmedIndex, normHours, loanText, loanFits } from "../lib/loans";
 import { pmList, isPm, pmNormalize, pmText, parsePmLines } from "../lib/pms";
 import { donorState, carryApprovals, allocAt } from "../lib/alloc";
+import HrMetrics from "./HrMetrics";
 import TeamDesk from "./TeamDesk";
 import Reminders from "./Reminders";
 import PayDesk from "./PayDesk";
@@ -414,6 +415,7 @@ const ICONS = {
   sheet: "M4 4h16v16H4zM4 10h16M10 4v16",
   pay: "M3 6h18v12H3zM3 10h18M7 15h3",
   snap: "M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z",
+  hr: "M3 20h18M6 20V10M11 20V4M16 20v-7M21 20V8",
   lists: "M16 19v-1a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v1M9 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM22 19v-1a4 4 0 0 0-3-3.87M16 4.13a3 3 0 0 1 0 5.74",
   out: "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9",
   collapse: "M4 4h16v16H4zM9 4v16M16 9l-3 3 3 3",
@@ -2296,7 +2298,7 @@ export default function TransferDesk() {
       <style>{css}</style>
       {(() => {
         /* Навігація: розділи — у бічному меню, вкладки розділу — над сторінкою. */
-        const allowed = (k) => isAcc ? k === "pay" || k === "lists" : isAdmin || !["approve", "lists", "fin", "req", "remind", "pay", "loans"].includes(k);
+        const allowed = (k) => isAcc ? k === "pay" || k === "lists" : isAdmin || !["approve", "lists", "fin", "req", "remind", "pay", "loans", "hr"].includes(k);
         const loansPending = loans.filter((l) => l.status === "pending").length;
         const TABS = {
           form: "Нове переведення", journal: "Журнал",
@@ -2304,7 +2306,7 @@ export default function TransferDesk() {
           req: "Заявки" + (newRequests.length ? " · " + newRequests.length : ""),
           loans: "Факт по переведеннях" + (loansPending ? " · " + loansPending : ""),
           teams: "Табель команд", remind: "Нагадування", fin: "Місяць · фін. облік", report: "Звіт по місяцях",
-          snap: "Зріз на дату", lists: "Довідник", pay: "Відомості ЗП",
+          snap: "Зріз на дату", hr: "HR-метрики", lists: "Довідник", pay: "Відомості ЗП",
         };
         const pfOpen = ((pf && pf.changes) || []).filter((x) => x.status === "new").length;
         const SECTIONS = [
@@ -2312,6 +2314,7 @@ export default function TransferDesk() {
           { k: "sheet", label: "Табель", icon: "sheet", tabs: ["teams", "remind", "fin", "report"] },
           { k: "pay", label: "Відомості ЗП", icon: "pay", tabs: ["pay"] },
           { k: "snap", label: "Зріз на дату", icon: "snap", tabs: ["snap"] },
+          { k: "hr", label: "HR-метрики", icon: "hr", tabs: ["hr"] },
           { k: "lists", label: "Довідник", icon: "lists", tabs: ["lists"], badge: isAdmin ? pfOpen : 0 },
         ].map((x) => ({ ...x, tabs: x.tabs.filter(allowed) })).filter((x) => x.tabs.length);
         const cur = SECTIONS.find((x) => x.tabs.includes(tab)) || SECTIONS[0];
@@ -2820,6 +2823,11 @@ export default function TransferDesk() {
             </div>
           );
         })()}
+
+        {/* ── HR-МЕТРИКИ ── */}
+        {tab === "hr" && isAdmin && (
+          <HrMetrics employees={employees} transfers={transfers} teams={teams} today={today} onOpenCard={setCardId} onExport={downloadXlsx} />
+        )}
 
         {/* ── ЗРІЗ НА ДАТУ ── */}
         {tab === "snap" && (() => {
