@@ -522,6 +522,9 @@ export default function TransferDesk() {
   const [journalQuery, setJournalQuery] = useState("");
   const [showLog, setShowLog] = useState(false);
   const [snapDate, setSnapDate] = useState(todayISO());
+  const [snapCmp, setSnapCmp] = useState("");
+  const [snapQ, setSnapQ] = useState("");
+  const [snapOpen, setSnapOpen] = useState({});
   const [openMonth, setOpenMonth] = useState(null);
   const [year, setYear] = useState(today.slice(0, 4));
 
@@ -1254,8 +1257,26 @@ export default function TransferDesk() {
     Object.values(byProject).forEach((l) => l.sort((a, b) => b.percent - a.percent || a.name.localeCompare(b.name, "uk")));
     const split = employees.filter((e) => allocAt(e, transfers, snapDate).length > 1).length;
     const between = transfers.filter((t) => !t.cancelled && ((t.effectiveDate > today && t.effectiveDate <= snapDate) || (t.effectiveDate <= today && t.effectiveDate > snapDate))).length;
-    return { byProject, split, between, names: Object.keys(byProject).sort((a, b) => a.localeCompare(b, "uk")) };
-  }, [employees, transfers, snapDate, today]);
+    // Порівняння з іншою датою: хто прийшов / пішов / змінив відсоток у кожному проєкті.
+    const diff = {};
+    if (snapCmp) {
+      const before = {};
+      employees.forEach((e) => allocAt(e, transfers, snapCmp).forEach((x) => { (before[x.project] = before[x.project] || {})[e.id] = x.percent; }));
+      const projects = new Set([...Object.keys(byProject), ...Object.keys(before)]);
+      projects.forEach((p) => {
+        const now = Object.fromEntries((byProject[p] || []).map((x) => [x.id, x.percent])), was = before[p] || {};
+        const nameById = Object.fromEntries(employees.map((e) => [e.id, e.name]));
+        const rows = [];
+        Object.keys(now).forEach((id) => { if (was[id] === undefined) rows.push({ id, name: nameById[id], kind: "in", from: 0, to: now[id] }); else if (Math.abs(was[id] - now[id]) > 0.001) rows.push({ id, name: nameById[id], kind: "chg", from: was[id], to: now[id] }); });
+        Object.keys(was).forEach((id) => { if (now[id] === undefined) rows.push({ id, name: nameById[id], kind: "out", from: was[id], to: 0 }); });
+        const f = (o) => Object.values(o).reduce((a, v) => a + v / 100, 0);
+        diff[p] = { rows, dFte: f(now) - f(was) };
+      });
+    }
+    const all = Object.keys(byProject);
+    const names = (snapCmp ? [...new Set([...all, ...Object.keys(diff)])] : all).sort((a, b) => a.localeCompare(b, "uk"));
+    return { byProject, split, between, diff, names };
+  }, [employees, transfers, snapDate, snapCmp, today]);
   const fteIn = (list) => list.reduce((s, x) => s + x.percent / 100, 0);
   const exportSnapshot = () => downloadXlsx("zriz-" + snapDate + ".xlsx", [
     { name: "Зріз " + fmt(snapDate), freeze: 1, cols: [26, 26, 12],
@@ -2801,56 +2822,109 @@ export default function TransferDesk() {
         })()}
 
         {/* ── ЗРІЗ НА ДАТУ ── */}
-        {tab === "snap" && (
-          <div style={{ display: "grid", gap: 20 }}>
-            <section style={{ ...card, padding: 22 }}>
+        {tab === "snap" && (() => {
+          const q = snapQ.trim().toLowerCase();
+          const shownNames = snapshot.names.filter((p) => !q || p.toLowerCase().includes(q) || (snapshot.byProject[p] || []).some((x) => x.name.toLowerCase().includes(q)));
+          const changedNames = snapCmp ? shownNames.filter((p) => (snapshot.diff[p] || { rows: [] }).rows.length) : shownNames;
+          const rowsOut = snapCmp ? changedNames : shownNames;
+          const allOpen = rowsOut.length > 0 && rowsOut.every((p) => snapOpen[p]);
+          const totalFte = snapshot.names.reduce((s2, p) => s2 + fteIn(snapshot.byProject[p] || []), 0);
+          const kindLabel = { in: ["прийшов", C.signal], out: ["пішов", C.stop], chg: ["змінився", C.warn] };
+          return (
+          <div style={{ display: "grid", gap: 16 }}>
+            <section style={{ ...card, padding: "16px 20px" }}>
               <div style={{ display: "flex", gap: 14, alignItems: "flex-end", flexWrap: "wrap" }}>
-                <div style={{ width: 190 }}>
+                <div style={{ width: 170 }}>
                   <label style={label} htmlFor="snap">Стан на дату</label>
                   <input id="snap" type="date" value={snapDate} onChange={(e) => setSnapDate(e.target.value)} />
                 </div>
+                <div style={{ width: 170 }}>
+                  <label style={label} htmlFor="snapcmp">Порівняти з датою</label>
+                  <input id="snapcmp" type="date" value={snapCmp} onChange={(e) => setSnapCmp(e.target.value)} />
+                </div>
                 <div style={{ display: "flex", gap: 6, paddingBottom: 2, flexWrap: "wrap" }}>
                   <button onClick={() => setSnapDate(today)} style={chip(snapDate === today)}>сьогодні</button>
-                  <button onClick={() => setSnapDate(addMonths(today, 1))} style={chip(snapDate === addMonths(today, 1))}>через місяць</button>
-                  <button onClick={() => setSnapDate(addMonths(today, 3))} style={chip(snapDate === addMonths(today, 3))}>через квартал</button>
-                  <button onClick={() => setSnapDate(addMonths(today, -1))} style={chip(snapDate === addMonths(today, -1))}>місяць тому</button>
+                  <button onClick={() => setSnapDate(addMonths(today, 1))} style={chip(snapDate === addMonths(today, 1))}>+ місяць</button>
+                  <button onClick={() => setSnapDate(addMonths(today, 3))} style={chip(snapDate === addMonths(today, 3))}>+ квартал</button>
+                  {snapCmp
+                    ? <button className="link" onClick={() => setSnapCmp("")}>прибрати порівняння</button>
+                    : <button className="link" onClick={() => setSnapCmp(addMonths(snapDate, -1))}>з місяцем раніше</button>}
                 </div>
-                <button onClick={exportSnapshot} style={{ marginLeft: "auto", cursor: "pointer", padding: "8px 14px", borderRadius: 8, border: "1px solid " + C.line, background: C.surface, color: C.ink2 }}>
-                  Вивантажити зріз в Excel
-                </button>
+                <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+                  <input type="text" value={snapQ} onChange={(e) => setSnapQ(e.target.value)} placeholder="Проєкт або ім'я" aria-label="Пошук у зрізі" style={{ width: 180 }} />
+                  <button className="ghost" onClick={exportSnapshot}>Excel</button>
+                </div>
               </div>
-              <p style={{ margin: "14px 0 0", color: C.ink2 }}>
-                {fmt(snapDate)}: {employees.length} {plural(employees.length, "співробітник", "співробітники", "співробітників")} на {snapshot.names.length} {plural(snapshot.names.length, "проєкті", "проєктах", "проєктах")}
-                {snapshot.split > 0 && ", з них " + snapshot.split + " на кількох одночасно"}
-                {snapshot.between > 0 && (snapDate > today
-                  ? " · до цієї дати спрацює " + snapshot.between + " " + plural(snapshot.between, "переведення", "переведення", "переведень")
-                  : " · відтоді сталося " + snapshot.between + " " + plural(snapshot.between, "переведення", "переведення", "переведень"))}
+              <p style={{ margin: "12px 0 0", color: C.ink2, fontSize: 13.5 }}>
+                <b>{fmt(snapDate)}</b>: {employees.length} {plural(employees.length, "людина", "людини", "людей")} · {snapshot.names.filter((p) => (snapshot.byProject[p] || []).length).length} {plural(snapshot.names.length, "проєкт", "проєкти", "проєктів")} · {round2(totalFte)} {plural(Math.round(totalFte), "ставка", "ставки", "ставок")}
+                {snapshot.split > 0 && " · " + snapshot.split + " на кількох проєктах"}
+                {snapshot.between > 0 && (snapDate > today ? " · до цієї дати спрацює переведень: " + snapshot.between : " · відтоді було переведень: " + snapshot.between)}
               </p>
+              {snapCmp && <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 12.5 }}>Показано лише проєкти, де щось змінилось між {fmt(snapCmp)} і {fmt(snapDate)}: {changedNames.length}.</p>}
             </section>
 
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 20 }}>
-              {snapshot.names.map((p) => {
-                const list = snapshot.byProject[p], fte = fteIn(list);
-                return (
-                  <section key={p} style={{ ...card, padding: 18 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>
-                      <h3 style={{ margin: 0, fontFamily: SERIF, fontSize: 16, fontWeight: 600 }}>{p}</h3>
-                      <span className="num" style={{ color: C.muted, fontSize: 12.5 }}>{list.length} {plural(list.length, "особа", "особи", "осіб")} · {round2(fte)} {plural(Math.round(fte), "ставка", "ставки", "ставок")}</span>
-                    </div>
-                    <ul style={{ listStyle: "none", margin: "12px 0 0", padding: 0 }}>
-                      {list.map((x) => (
-                        <li key={x.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "7px 0", borderTop: "1px solid " + C.lineSoft }}>
-                          <button className="link" style={{ color: C.ink, textDecoration: "none", textAlign: "left" }} onClick={() => setCardId(x.id)}>{x.name}</button>
-                          <span className="num" style={{ color: x.percent === 100 ? C.muted : C.signal, fontWeight: x.percent === 100 ? 400 : 600 }}>{round2(x.percent)}%</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </section>
-                );
-              })}
-            </div>
+            <section style={{ ...card, overflow: "hidden" }}>
+              <div style={{ overflowX: "auto" }}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th style={{ width: 32 }}>
+                        <button className="link" aria-label={allOpen ? "Згорнути всі" : "Розгорнути всі"} style={{ textDecoration: "none" }}
+                          onClick={() => setSnapOpen(Object.fromEntries(rowsOut.map((p) => [p, !allOpen])))}>{allOpen ? "▾" : "▸"}</button>
+                      </th>
+                      <th>Проєкт</th>
+                      <th style={{ width: 90, textAlign: "right" }}>Людей</th>
+                      <th style={{ width: 90, textAlign: "right" }}>Ставок</th>
+                      {snapCmp && <th style={{ width: 110, textAlign: "right" }}>Зміна</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rowsOut.length === 0 && (
+                      <tr><td colSpan={snapCmp ? 5 : 4} style={{ padding: "28px 16px", textAlign: "center", color: C.muted }}>{snapCmp ? "Між цими датами змін немає." : "Нічого не знайдено."}</td></tr>
+                    )}
+                    {rowsOut.map((p) => {
+                      const list = snapshot.byProject[p] || [], fte = fteIn(list), open = !!snapOpen[p], dd = snapshot.diff[p];
+                      return (
+                        <React.Fragment key={p}>
+                          <tr onClick={() => setSnapOpen((o) => ({ ...o, [p]: !o[p] }))} style={{ cursor: "pointer" }}>
+                            <td style={{ color: C.muted }}>{open ? "▾" : "▸"}</td>
+                            <td style={{ fontWeight: 600 }}>{p}</td>
+                            <td className="num" style={{ textAlign: "right" }}>{list.length}</td>
+                            <td className="num" style={{ textAlign: "right" }}>{round2(fte)}</td>
+                            {snapCmp && <td className="num" style={{ textAlign: "right", color: dd && dd.dFte > 0 ? C.signal : dd && dd.dFte < 0 ? C.stop : C.muted }}>
+                              {dd && Math.abs(dd.dFte) > 0.001 ? (dd.dFte > 0 ? "+" : "") + round2(dd.dFte) : "—"}
+                            </td>}
+                          </tr>
+                          {open && (
+                            <tr>
+                              <td />
+                              <td colSpan={snapCmp ? 4 : 3} style={{ background: "#F8FAFC", padding: "6px 16px 12px" }}>
+                                {snapCmp && dd && dd.rows.map((r) => (
+                                  <div key={r.kind + r.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "5px 0", fontSize: 13 }}>
+                                    <span><button className="link" style={{ color: C.ink, textDecoration: "none" }} onClick={(ev) => { ev.stopPropagation(); setCardId(r.id); }}>{r.name}</button>{" "}
+                                      <span style={{ color: kindLabel[r.kind][1], fontSize: 12 }}>{kindLabel[r.kind][0]}</span></span>
+                                    <span className="num" style={{ color: kindLabel[r.kind][1] }}>{round2(r.from)}% → {round2(r.to)}%</span>
+                                  </div>
+                                ))}
+                                {!snapCmp && list.map((x) => (
+                                  <div key={x.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "5px 0", fontSize: 13, borderTop: "1px solid " + C.lineSoft }}>
+                                    <button className="link" style={{ color: C.ink, textDecoration: "none", textAlign: "left" }} onClick={(ev) => { ev.stopPropagation(); setCardId(x.id); }}>{x.name}</button>
+                                    <span className="num" style={{ color: x.percent === 100 ? C.muted : C.signal, fontWeight: x.percent === 100 ? 400 : 600 }}>{round2(x.percent)}%</span>
+                                  </div>
+                                ))}
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </section>
           </div>
-        )}
+          );
+        })()}
 
         {/* ── КОМАНДИ І ТЕГИ ── */}
         {tab === "teams" && (
