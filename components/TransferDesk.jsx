@@ -4,7 +4,7 @@ import * as XLSX from "xlsx";
 import { mergeState, uniq } from "../lib/merge";
 import { hoursToAlloc, hoursTotal, hoursText, hasHours, MAX_HOURS } from "../lib/hours";
 import { api } from "../lib/api";
-import { workingOn, inTeamOn, lastTeamId } from "../lib/people";
+import { workingOn, inTeamOn, lastTeamId, entryKey } from "../lib/people";
 import { orderProjects, isInactive } from "../lib/projects";
 import { applyLoans, confirmedIndex, normHours, loanText, loanFits } from "../lib/loans";
 import { pmList, isPm, pmNormalize, pmText, parsePmLines } from "../lib/pms";
@@ -993,7 +993,10 @@ export default function TransferDesk() {
   const teamMembers = (id) => employees.filter((e) => inTeamOn(e, id, periodStart(period)));
   const pKey = periodKey(period.y, period.m, period.half);
   const entryId = (empId, key) => "en_" + key + "_" + empId;
-  const entryOf = (empId, key) => entries.find((x) => x.id === entryId(empId, key));
+  // Парттайм: запис лежить у першій половині місяця, друга половина читає його ж.
+  const empById = useMemo(() => new Map(employees.map((e) => [e.id, e])), [employees]);
+  const entryOf = (empId, key) => entries.find((x) => x.id === entryId(empId, entryKey(empById.get(empId), key)));
+  const partRO = (empId) => entryKey(empById.get(empId), pKey) !== pKey;
   const allocIn = (empId, key) => (entryOf(empId, key) || {}).alloc || [];
   /* Підтверджені години позичання за половину місяця: частка проєкту-позичальника =
      години ÷ усі години людини за період (з табеля в годинах, інакше норма), решта — пропорційно. */
@@ -1014,6 +1017,7 @@ export default function TransferDesk() {
   const isSubmitted = (t, key) => !!((t.submitted || {})[key || pKey]);
 
   function setCell(empId, project, value) {
+    if (partRO(empId)) return;
     const n = value === "" ? 0 : Number(value);
     if (!Number.isFinite(n)) return;
     const v = Math.max(0, Math.min(100, n));
@@ -1028,6 +1032,7 @@ export default function TransferDesk() {
   }
   // Підставити в табель розподіл за переведеннями (пропорційно дням періоду).
   function applyMoves(empId, alloc) {
+    if (partRO(empId)) return;
     setEntries((p) => {
       const id = entryId(empId, pKey), old = p.find((x) => x.id === id);
       const next = { id, periodKey: pKey, employeeId: empId, alloc: alloc.map((r) => ({ ...r })), updatedAt: nowISO(), updatedBy: user ? user.name : "" };
@@ -1037,6 +1042,7 @@ export default function TransferDesk() {
     pushLog("підставив розподіл за переведеннями", (e ? e.name : empId) + ": " + allocText(alloc));
   }
   function setHoursCell(empId, project, value) {
+    if (partRO(empId)) return;
     const n = value === "" ? 0 : Number(value);
     if (!Number.isFinite(n)) return;
     const v = Math.max(0, Math.min(MAX_HOURS, n));
@@ -2909,15 +2915,17 @@ export default function TransferDesk() {
                             const mv = movesIn(e, transfers, periodStart(period), periodEnd(period));
                             const want = mv.length ? blendAlloc(e, transfers, periodStart(period), periodEnd(period)) : [];
                             const off = mv.length && allocSig(a) !== allocSig(want);
+                            const ro = locked || partRO(e.id);
                             return (
                               <tr key={e.id}>
                                 <td style={{ position: "sticky", left: 0, background: C.surface }}>
                                   <button className="link" style={{ color: C.ink, textDecoration: "none", fontWeight: 600 }} onClick={() => setCardId(e.id)}>{e.name}</button>
                                   {e.position && <div style={{ color: C.muted, fontSize: 11.5 }}>{e.position}</div>}
+                                  {e.partTime && <div style={{ color: C.plan, fontSize: 11.5 }}>{partRO(e.id) ? "парттайм · взято з 01–15, на весь місяць" : "парттайм · одне подання на весь місяць"}</div>}
                                   {off && (
                                     <div style={{ color: C.plan, fontSize: 11.5, marginTop: 2 }}>
                                       переведення з {mv.map((t) => fmt(t.effectiveDate > periodStart(period) ? t.effectiveDate : t.returnDate).slice(0, 5)).join(", ")}: {tagOf(want, codes)}
-                                      {!locked && <button className="link" style={{ marginLeft: 6, fontSize: 11.5 }} onClick={() => applyMoves(e.id, want)}>підставити</button>}
+                                      {!ro && <button className="link" style={{ marginLeft: 6, fontSize: 11.5 }} onClick={() => applyMoves(e.id, want)}>підставити</button>}
                                     </div>
                                   )}
                                 </td>
@@ -2925,16 +2933,16 @@ export default function TransferDesk() {
                                   <td key={c} style={{ padding: 4 }}>
                                     {inHours ? (
                                       <>
-                                        <input type="number" className="num" min="0" max={MAX_HOURS} step="0.5" value={hoursValue(e.id, c)} disabled={locked}
+                                        <input type="number" className="num" min="0" max={MAX_HOURS} step="0.5" value={hoursValue(e.id, c)} disabled={ro}
                                           onChange={(ev) => setHoursCell(e.id, c, ev.target.value)} aria-label={e.name + ", " + c + ", годин"}
-                                          style={{ textAlign: "center", padding: "7px 4px", background: locked ? "#F8FAFC" : C.surface,
+                                          style={{ textAlign: "center", padding: "7px 4px", background: ro ? "#F8FAFC" : C.surface,
                                             border: "1px solid " + (hoursValue(e.id, c) !== "" ? C.line : C.lineSoft) }} />
                                         <div className="num" style={{ textAlign: "center", fontSize: 11, color: C.muted, minHeight: 14 }}>{cellValue(e.id, c) !== "" ? cellValue(e.id, c) + "%" : ""}</div>
                                       </>
                                     ) : (
-                                      <input type="number" className="num" min="0" max="100" value={cellValue(e.id, c)} disabled={locked}
+                                      <input type="number" className="num" min="0" max="100" value={cellValue(e.id, c)} disabled={ro}
                                         onChange={(ev) => setCell(e.id, c, ev.target.value)} aria-label={e.name + ", " + c}
-                                        style={{ textAlign: "center", padding: "7px 4px", background: locked ? "#F8FAFC" : C.surface,
+                                        style={{ textAlign: "center", padding: "7px 4px", background: ro ? "#F8FAFC" : C.surface,
                                           border: "1px solid " + (cellValue(e.id, c) ? C.line : C.lineSoft) }} />
                                     )}
                                   </td>
@@ -4035,6 +4043,12 @@ export default function TransferDesk() {
                   <p className="num" style={{ margin: "6px 0 0", color: C.signal, fontWeight: 600, fontSize: 13 }}>
                     {((cardEmp.teamAlloc || []).length ? tagOf(cardEmp.teamAlloc, codes) : tagOf(now, codes)) || ""}
                   </p>
+                  <label style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10, fontSize: 13, color: C.ink2, cursor: isAdmin ? "pointer" : "default" }}
+                    title="Розподіл такої людини подається один раз на місяць у періоді 01–15, а друга половина бере його ж.">
+                    <input type="checkbox" checked={!!cardEmp.partTime} disabled={!isAdmin} style={{ width: "auto" }}
+                      onChange={(ev) => { setEmp(cardEmp.id, { partTime: ev.target.checked }); pushLog(ev.target.checked ? "позначив парттайм" : "зняв позначку парттайм", cardEmp.name); }} />
+                    Парттайм — розподіл подається раз на місяць (у періоді 01–15)
+                  </label>
                 </div>
                 <button className="del" onClick={() => setCardId(null)} aria-label="Закрити">✕</button>
               </div>

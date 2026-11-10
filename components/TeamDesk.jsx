@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
 import { hoursToAlloc, hoursTotal, hoursText, hasHours, MAX_HOURS } from "../lib/hours";
-import { workingOn, inTeamOn, wasInTeam } from "../lib/people";
+import { workingOn, inTeamOn, wasInTeam, entryKey } from "../lib/people";
 
 /* Робоче місце відповідального за відсотки: лише свої команди.
 Дані приходять з /api/team — сервер не віддає сюди ні чужих команд,
@@ -179,10 +179,13 @@ export default function TeamDesk({ user, token, onSignOut }) {
   const sub = team ? (team.submitted || {})[pKey] : null;
   const locked = !!sub;
 
-  const allocOf = (list, empId, key) => ((list.find((x) => x.id === entryId(key, empId)) || {}).alloc) || [];
-  const entryIn = (empId, key) => entries.find((x) => x.id === entryId(key, empId));
+  // Парттайм: запис лежить у першій половині місяця, друга читає його ж.
+  const keyOf = (empId, key) => entryKey((data?.members || []).find((y) => y.id === empId), key);
+  const partRO = (empId) => keyOf(empId, pKey) !== pKey;
+  const allocOf = (list, empId, key) => ((list.find((x) => x.id === entryId(keyOf(empId, key), empId)) || {}).alloc) || [];
+  const entryIn = (empId, key) => entries.find((x) => x.id === entryId(keyOf(empId, key), empId));
   const hoursIn = (empId, key) => (entryIn(empId, key) || {}).hours || [];
-  const rowOut = (list, empId, key) => { const x = list.find((y) => y.id === entryId(key, empId)) || {}; return { employeeId: empId, alloc: x.alloc || [], ...(hasHours(x) ? { hours: x.hours } : {}) }; };
+  const rowOut = (list, empId, key) => { const x = list.find((y) => y.id === entryId(keyOf(empId, key), empId)) || {}; return { employeeId: empId, alloc: x.alloc || [], ...(hasHours(x) ? { hours: x.hours } : {}) }; };
   const allocIn = (empId, key) => allocOf(entries, empId, key);
   const cellValue = (empId, project) => { const r = allocIn(empId, pKey).find((x) => x.project === project); return r ? r.percent : ""; };
   const rowTotal = (empId) => sum(allocIn(empId, pKey));
@@ -204,7 +207,7 @@ export default function TeamDesk({ user, token, onSignOut }) {
   }, [data, compact, members, entries, pKey]);
 
   function setCell(empId, project, value) {
-    if (locked) return;
+    if (locked || partRO(empId)) return;
     const n = value === "" ? 0 : Number(value);
     if (!Number.isFinite(n)) return;
     const v = Math.max(0, Math.min(100, n));
@@ -223,7 +226,7 @@ export default function TeamDesk({ user, token, onSignOut }) {
   }
 
   function setHours(empId, project, value) {
-    if (locked) return;
+    if (locked || partRO(empId)) return;
     const n = value === "" ? 0 : Number(value);
     if (!Number.isFinite(n)) return;
     const v = Math.max(0, Math.min(MAX_HOURS, n));
@@ -442,25 +445,27 @@ export default function TeamDesk({ user, token, onSignOut }) {
                       <tbody>
                         {members.map((m) => {
                           const tot = rowTotal(m.id), tg = tagOf(allocIn(m.id, pKey), codes);
+                          const ro = locked || partRO(m.id);
                           return (
                             <tr key={m.id}>
                               <td style={{ position: "sticky", left: 0, background: C.surface }}>
                                 <div style={{ fontWeight: 600 }}>{m.name}</div>
                                 {m.position && <div style={{ color: C.muted, fontSize: 11.5 }}>{m.position}</div>}
+                                {m.partTime && <div style={{ color: C.plan, fontSize: 11.5 }}>{partRO(m.id) ? "парттайм · взято з 01–15, на весь місяць" : "парттайм · одне подання на весь місяць"}</div>}
                               </td>
                               {cols.map((c) => (
                                 <td key={c} style={{ padding: 4 }}>
                                   {inHours ? (
                                     <>
-                                      <input type="number" className="num" min="0" max={MAX_HOURS} step="0.5" value={hoursValue(m.id, c)} disabled={locked}
+                                      <input type="number" className="num" min="0" max={MAX_HOURS} step="0.5" value={hoursValue(m.id, c)} disabled={ro}
                                         onChange={(ev) => setHours(m.id, c, ev.target.value)} aria-label={m.name + ", " + c + ", годин"}
-                                        style={{ textAlign: "center", padding: "7px 4px", background: locked ? "#F8FAFC" : C.surface }} />
+                                        style={{ textAlign: "center", padding: "7px 4px", background: ro ? "#F8FAFC" : C.surface }} />
                                       <div className="num" style={{ textAlign: "center", fontSize: 11, color: C.muted, minHeight: 14 }}>{cellValue(m.id, c) !== "" ? cellValue(m.id, c) + "%" : ""}</div>
                                     </>
                                   ) : (
-                                    <input type="number" className="num" min="0" max="100" value={cellValue(m.id, c)} disabled={locked}
+                                    <input type="number" className="num" min="0" max="100" value={cellValue(m.id, c)} disabled={ro}
                                       onChange={(ev) => setCell(m.id, c, ev.target.value)} aria-label={m.name + ", " + c}
-                                      style={{ textAlign: "center", padding: "7px 4px", background: locked ? "#F8FAFC" : C.surface }} />
+                                      style={{ textAlign: "center", padding: "7px 4px", background: ro ? "#F8FAFC" : C.surface }} />
                                   )}
                                 </td>
                               ))}

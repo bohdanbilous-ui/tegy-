@@ -4,6 +4,7 @@ import { whoIs } from "../../../lib/auth";
 import { sameName } from "../../../lib/users";
 import { cleanHours, hoursToAlloc } from "../../../lib/hours";
 import { orderProjects, isInactive } from "../../../lib/projects";
+import { entryKey, isPartTime } from "../../../lib/people";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +23,7 @@ function sliceFor(state, me) {
   const ids = new Set(teams.map((t) => t.id));
   const members = (state.employees || [])
     .filter((e) => (ids.has(e.teamId) || (e.teamHist || []).some((h) => ids.has(h.teamId))) && !tomb["e:" + e.id])
-    .map((e) => ({ id: e.id, name: e.name, position: e.position || "", teamId: e.teamId, leftOn: e.leftOn || "", ...(e.teamHist && e.teamHist.length ? { teamHist: e.teamHist } : {}) }));
+    .map((e) => ({ id: e.id, name: e.name, position: e.position || "", teamId: e.teamId, leftOn: e.leftOn || "", ...(isPartTime(e) ? { partTime: true } : {}), ...(e.teamHist && e.teamHist.length ? { teamHist: e.teamHist } : {}) }));
   const memberIds = new Set(members.map((m) => m.id));
   const entries = (state.entries || []).filter((x) => memberIds.has(x.employeeId));
   // Колонки табеля: проєкти з довідника в його порядку + ті, що вже є в записах команди.
@@ -88,6 +89,8 @@ export async function PUT(request) {
     if (!memberIds.has(r?.employeeId)) {
       return NextResponse.json({ error: "Людина не належить до команди «" + team.name + "»." }, { status: 403 });
     }
+    // Парттайм подається раз на місяць у періоді 01–15: у другій половині його рядок не приймаємо.
+    if (entryKey(members.find((e) => e.id === r.employeeId), periodKey) !== periodKey) continue;
     if (Array.isArray(r.hours) && r.hours.length) {
       const hours = cleanHours(r.hours);
       if (!hours) return NextResponse.json({ error: "Забагато годин: у періоді їх не може бути більше 744." }, { status: 400 });
@@ -122,7 +125,7 @@ export async function PUT(request) {
 
   if (body.submit) {
     const bad = members.filter((e) => {
-      const x = entries.find((y) => y.id === entryId(periodKey, e.id));
+      const x = entries.find((y) => y.id === entryId(entryKey(e, periodKey), e.id));
       return Math.abs(total(x && x.alloc) - 100) > 0.01;
     });
     if (bad.length) {
