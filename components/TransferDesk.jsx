@@ -31,6 +31,19 @@ const deskUser = (u) => roleOf(u) === "admin" || roleOf(u) === "hrd" || roleOf(u
 const ROLE_LABEL = { admin: "адміністратор", hrd: "HRD", accountant: "бухгалтер", pm: "PM", owner: "відповідальний" };
 const ALLOWED_DOMAIN = process.env.NEXT_PUBLIC_ALLOWED_DOMAIN || "";
 
+/* Довгі пояснення не заважають роботі: згорнуті за замовчуванням, відкриваються кліком. */
+function Info({ title = "Як це працює", children }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ margin: "8px 0 0" }}>
+      <button className="link" aria-expanded={open} onClick={() => setOpen((o) => !o)} style={{ fontSize: 12.5, color: "#64748B", textDecoration: "none" }}>
+        ⓘ {title} {open ? "▴" : "▾"}
+      </button>
+      {open && <div style={{ margin: "8px 0 0", color: "#64748B", fontSize: 12.5, lineHeight: 1.55, maxWidth: 780 }}>{children}</div>}
+    </div>
+  );
+}
+
 const C = {
   paper: "#F5F7FB", surface: "#FFFFFF", ink: "#0F172A", ink2: "#334155",
   muted: "#64748B", line: "#DDE3EC", lineSoft: "#EEF2F6",
@@ -522,6 +535,11 @@ export default function TransferDesk() {
   const [openMember, setOpenMember] = useState(null);
   const [addMember, setAddMember] = useState({});
   const [compact, setCompact] = useState({});
+  // Які команди розгорнуті в табелі: запам'ятовується в браузері. За замовчуванням усе згорнуто (єдина команда — розгорнута).
+  const [openTeams, setOpenTeams] = useState({});
+  const [finMenu, setFinMenu] = useState(false); // меню «Дії» у фін. обліку
+  useEffect(() => { try { setOpenTeams(JSON.parse(localStorage.getItem("allocate-open-teams") || "{}")); } catch (e) { /* немає збереженого */ } }, []);
+  const saveOpen = (n) => { try { localStorage.setItem("allocate-open-teams", JSON.stringify(n)); } catch (e) { /* ігноруємо */ } return n; };
   const [units, setUnits] = useState({}); // команда → "pct" | "h"; порожньо — за даними періоду
   const [listNote, setListNote] = useState("");
   const [book, setBook] = useState("emp");
@@ -2848,15 +2866,22 @@ export default function TransferDesk() {
                 {pKey !== periodKey(periodOf(today).y, periodOf(today).m, periodOf(today).half) && (
                   <button className="link" onClick={() => setPeriod(periodOf(today))}>до поточного</button>
                 )}
-                <button onClick={exportTags} style={{ marginLeft: "auto", cursor: "pointer", padding: "8px 14px", borderRadius: 8, border: "1px solid " + C.line, background: C.surface, color: C.ink2 }}>
-                  Вивантажити теги
-                </button>
+                <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                  {teams.length > 1 && (
+                    <button className="ghost" onClick={() => setOpenTeams(saveOpen(Object.fromEntries(teams.map((t) => [t.id, !teams.every((x) => openTeams[x.id])]))))}>
+                      {teams.every((t) => openTeams[t.id]) ? "Згорнути всі" : "Розгорнути всі"}
+                    </button>
+                  )}
+                  <button onClick={exportTags} style={{ cursor: "pointer", padding: "8px 14px", borderRadius: 8, border: "1px solid " + C.line, background: C.surface, color: C.ink2 }}>
+                    Вивантажити теги
+                  </button>
+                </div>
               </div>
-              <p style={{ margin: "10px 0 0", color: C.muted, fontSize: 12.5 }}>
+              <Info>
                 Відсотки подають за 01–15 і 16–кінець місяця. Кожен період зберігається окремо, тож історія лишається.
                 Можна вносити години (перемикач «% / години» у команді): відсоток проєкту — його частка від усіх годин людини.
                 Тег кожної людини збирається з її рядка.
-              </p>
+              </Info>
               {noCode.length > 0 && (
                 <p style={{ margin: "12px 0 0", background: C.warnSoft, border: "1px solid #FED7AA", borderRadius: 8, padding: "10px 12px", color: C.warn }}>
                   Без коду {noCode.length} {plural(noCode.length, "проєкт", "проєкти", "проєктів")} — у тезі вони стануть «?».
@@ -2876,39 +2901,54 @@ export default function TransferDesk() {
               const sub = (t.submitted || {})[pKey], locked = !mine || !!sub, inHours = unitOf(t) === "h";
               const free = employees.filter((e) => !e.teamId);
               const hist = showHistory === t.id;
+              const open = openTeams[t.id] ?? teams.length === 1;
+              const done = filledIn(t.id), all = members.length;
               return (
                 <section key={t.id} style={{ ...card, overflow: "hidden" }}>
-                  <div style={{ padding: "14px 20px", borderBottom: "1px solid " + C.lineSoft, display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
-                    <h3 style={{ margin: 0, fontFamily: SERIF, fontSize: 16, fontWeight: 600 }}>{t.name}</h3>
-                    <span style={{ color: C.muted, fontSize: 12.5 }}>вносить {t.owner || "адміністратор"}</span>
-                    {members.length > 0 && (
-                      <span className="num" style={{ fontSize: 12.5, color: filledIn(t.id) === members.length ? C.signal : C.warn }}>
-                        заповнено {filledIn(t.id)} з {members.length}
+                  <div style={{ padding: "12px 20px", borderBottom: open ? "1px solid " + C.lineSoft : "none", display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+                    <button onClick={() => setOpenTeams(saveOpen({ ...openTeams, [t.id]: !open }))} aria-expanded={open}
+                      aria-label={(open ? "Згорнути " : "Розгорнути ") + t.name}
+                      style={{ display: "flex", alignItems: "center", gap: 10, flex: "1 1 280px", minWidth: 0, background: "none", border: 0, padding: 0, cursor: "pointer", textAlign: "left", color: C.ink, font: "inherit" }}>
+                      <span aria-hidden style={{ color: C.muted, width: 12, fontSize: 12 }}>{open ? "▾" : "▸"}</span>
+                      <h3 style={{ margin: 0, fontFamily: SERIF, fontSize: 16, fontWeight: 600 }}>{t.name}</h3>
+                      <span style={{ color: C.muted, fontSize: 12.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.owner || "адміністратор"}</span>
+                    </button>
+                    {all > 0 && (
+                      <span style={{ display: "flex", alignItems: "center", gap: 8 }} title={"Заповнено " + done + " з " + all}>
+                        <span aria-hidden style={{ width: 64, height: 4, borderRadius: 2, background: "#E7ECF4", overflow: "hidden" }}>
+                          <span style={{ display: "block", height: "100%", width: (all ? Math.round((done / all) * 100) : 0) + "%", background: done === all ? C.signal : C.warn }} />
+                        </span>
+                        <span className="num" style={{ fontSize: 12.5, color: done === all ? C.signal : C.muted }}>{done}/{all}</span>
                       </span>
                     )}
                     {sub && (
-                      <span style={{ background: C.signalSoft, color: C.signal, borderRadius: 999, padding: "2px 9px", fontSize: 12, fontWeight: 600 }}>
-                        подано · {sub.by}, {fmtDT(sub.at)}
+                      <span title={"Подав " + sub.by + ", " + fmtDT(sub.at)} style={{ background: C.signalSoft, color: C.signal, borderRadius: 999, padding: "2px 9px", fontSize: 12, fontWeight: 600 }}>
+                        подано
                       </span>
                     )}
-                    <div role="group" aria-label={"Одиниці табеля " + t.name} style={{ display: "flex", marginLeft: "auto" }}>
-                      {[["pct", "%"], ["h", "години"]].map(([k, l]) => (
-                        <button key={k} onClick={() => setUnits((u) => ({ ...u, [t.id]: k }))} aria-pressed={unitOf(t) === k}
-                          style={{ cursor: "pointer", padding: "4px 12px", fontSize: 12.5, border: "1px solid " + (unitOf(t) === k ? C.ink2 : C.line),
-                            background: unitOf(t) === k ? C.ink : C.surface, color: unitOf(t) === k ? "#fff" : C.ink2,
-                            borderRadius: k === "pct" ? "3px 0 0 3px" : "0 3px 3px 0", marginLeft: k === "h" ? -1 : 0 }}>{l}</button>
-                      ))}
-                    </div>
-                    <button className="link" style={{ fontSize: 12.5 }}
-                      title="Лише проєкти, на яких у команди вже були відсотки, або всі активні проєкти"
-                      onClick={() => setCompact((m) => ({ ...m, [t.id]: !(m[t.id] ?? true) }))}>
-                      {(compact[t.id] ?? true) ? "показати всі проєкти" : "лише проєкти команди"}
-                    </button>
-                    <button className="link" style={{ fontSize: 12.5 }} onClick={() => setShowHistory(hist ? null : t.id)}>
-                      {hist ? "сховати історію" : "історія періодів"}
-                    </button>
+                    {open && (
+                      <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                        <div role="group" aria-label={"Одиниці табеля " + t.name} style={{ display: "flex" }}>
+                          {[["pct", "%"], ["h", "год"]].map(([k, l]) => (
+                            <button key={k} onClick={() => setUnits((u) => ({ ...u, [t.id]: k }))} aria-pressed={unitOf(t) === k}
+                              style={{ cursor: "pointer", padding: "4px 12px", fontSize: 12.5, border: "1px solid " + (unitOf(t) === k ? C.ink2 : C.line),
+                                background: unitOf(t) === k ? C.ink : C.surface, color: unitOf(t) === k ? "#fff" : C.ink2,
+                                borderRadius: k === "pct" ? "3px 0 0 3px" : "0 3px 3px 0", marginLeft: k === "h" ? -1 : 0 }}>{l}</button>
+                          ))}
+                        </div>
+                        <button className="link" style={{ fontSize: 12.5 }}
+                          title="Лише проєкти, на яких у команди вже були відсотки, або всі активні проєкти"
+                          onClick={() => setCompact((m) => ({ ...m, [t.id]: !(m[t.id] ?? true) }))}>
+                          {(compact[t.id] ?? true) ? "всі проєкти" : "проєкти команди"}
+                        </button>
+                        <button className="link" style={{ fontSize: 12.5 }} onClick={() => setShowHistory(hist ? null : t.id)}>
+                          {hist ? "сховати історію" : "історія"}
+                        </button>
+                      </div>
+                    )}
                   </div>
 
+                  {open && (<>
                   {members.length === 0 ? (
                     <p style={{ padding: "18px 20px", margin: 0, color: C.muted }}>
                       {isAdmin ? "До команди ще нікого не прикріплено. Внизу є поле «Прикріпити людину» — у підказках ті, хто ще не в жодній команді." : "До команди ще нікого не прикріплено — людей додає адміністратор."}
@@ -3052,6 +3092,7 @@ export default function TransferDesk() {
                       </table>
                     </div>
                   )}
+                  </>)}
                 </section>
               );
             })}
@@ -3078,8 +3119,9 @@ export default function TransferDesk() {
                   <button className="ghost" onClick={() => setFinMonth((m) => stepMonth(m, 1))} aria-label="Наступний місяць">→</button>
                 </div>
                 {finClosed && (
-                  <span style={{ background: C.signalSoft, color: C.signal, borderRadius: 999, padding: "2px 9px", fontSize: 12, fontWeight: 600 }}>
-                    закрито · {finClose.by}, {fmtDT(finClose.at)}{finClose.force ? " · виняток: " + finClose.force : ""}
+                  <span title={"Закрив " + finClose.by + ", " + fmtDT(finClose.at) + (finClose.force ? ". Виняток: " + finClose.force : "")}
+                    style={{ background: C.signalSoft, color: C.signal, borderRadius: 999, padding: "2px 9px", fontSize: 12, fontWeight: 600 }}>
+                    закрито{finClose.force ? " · виняток" : ""}
                   </span>
                 )}
                 <input type="text" value={finQuery} onChange={(e) => setFinQuery(e.target.value)} placeholder="Пошук за прізвищем"
@@ -3089,45 +3131,41 @@ export default function TransferDesk() {
                   {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                   <option value="">Без табеля</option>
                 </select>
-                <button onClick={exportZp} disabled={!finPicked.length}
-                  title="Обрані рядки у форматі аркуша «Фіксовані теги» таблиці зарплат"
-                  style={{ cursor: finPicked.length ? "pointer" : "default", padding: "8px 14px", borderRadius: 8,
-                    border: "1px solid " + (finPicked.length ? C.line : C.lineSoft), background: C.surface, color: finPicked.length ? C.ink2 : C.muted }}>
-                  Теги для ЗП{finPicked.length ? " (" + finPicked.length + ")" : ""}
-                </button>
                 {isAdmin && !finClosed && (
-                  <>
-                    <button onClick={() => repRef.current && repRef.current.click()}
-                      title="Завантажити місячний звіт годин з таск-менеджера (.xlsx або .csv)"
-                      style={{ cursor: "pointer", padding: "8px 14px", borderRadius: 8, border: "1px solid " + C.line, background: C.surface, color: C.ink2 }}>
-                      Звіт годин
-                    </button>
-                    <input ref={repRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} aria-label="Файл звіту годин"
-                      onChange={(ev) => { const f = ev.target.files && ev.target.files[0]; if (f) readReport(f); ev.target.value = ""; }} />
-                  </>
+                  <input ref={repRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} aria-label="Файл звіту годин"
+                    onChange={(ev) => { const f = ev.target.files && ev.target.files[0]; if (f) readReport(f); ev.target.value = ""; }} />
                 )}
-                {zpReady && (
-                  <button onClick={sendZp} disabled={!finPicked.length || zpBusy}
-                    title="Оновити рядки обраних людей в аркуші «Фіксовані теги» Google Таблиці"
-                    style={{ cursor: finPicked.length && !zpBusy ? "pointer" : "default", padding: "8px 14px", borderRadius: 8,
-                      border: "1px solid " + (finPicked.length ? C.line : C.lineSoft), background: finPicked.length && !zpBusy ? C.signalSoft : C.surface,
-                      color: finPicked.length && !zpBusy ? C.signal : C.muted }}>
-                    {zpBusy ? "Надсилаю…" : "У Google Таблицю" + (finPicked.length ? " (" + finPicked.length + ")" : "")}
-                  </button>
-                )}
-                <button onClick={exportFin} style={{ cursor: "pointer", padding: "8px 14px", borderRadius: 8, border: "1px solid " + C.line, background: C.surface, color: C.ink2 }}>
-                  Звіт в Excel
-                </button>
+                <div style={{ position: "relative" }}>
+                  <button className="ghost" aria-haspopup="menu" aria-expanded={finMenu} onClick={() => setFinMenu((v) => !v)}>Дії ▾</button>
+                  {finMenu && (
+                    <>
+                      <div onClick={() => setFinMenu(false)} style={{ position: "fixed", inset: 0, zIndex: 9 }} />
+                      <div role="menu" style={{ ...card, position: "absolute", right: 0, top: "calc(100% + 6px)", zIndex: 10, padding: 6, minWidth: 260, display: "grid", gap: 2 }}>
+                        {[
+                          { l: "Теги для ЗП" + (finPicked.length ? " (" + finPicked.length + ")" : ""), off: !finPicked.length, t: "Обрані рядки у форматі аркуша «Фіксовані теги» таблиці зарплат", go: exportZp },
+                          ...(isAdmin && !finClosed ? [{ l: "Завантажити звіт годин", off: false, t: "Місячний звіт годин з таск-менеджера (.xlsx або .csv)", go: () => repRef.current && repRef.current.click() }] : []),
+                          ...(zpReady ? [{ l: zpBusy ? "Надсилаю…" : "У Google Таблицю" + (finPicked.length ? " (" + finPicked.length + ")" : ""), off: !finPicked.length || zpBusy, t: "Оновити рядки обраних людей в аркуші «Фіксовані теги» Google Таблиці", go: sendZp }] : []),
+                          { l: "Звіт в Excel", off: false, t: "", go: exportFin },
+                        ].map((it) => (
+                          <button key={it.l} role="menuitem" disabled={it.off} title={it.t} onClick={() => { setFinMenu(false); it.go(); }}
+                            style={{ textAlign: "left", padding: "8px 12px", border: 0, borderRadius: 6, background: "none", font: "inherit", cursor: it.off ? "default" : "pointer", color: it.off ? C.muted : C.ink2 }}>
+                            {it.l}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
               </div>
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 12 }}>
-                <span style={{ color: C.ink2, fontSize: 13, fontWeight: 600 }}>Теги для ЗП за:</span>
+                <span style={{ color: C.ink2, fontSize: 13, fontWeight: 600 }}>Теги за:</span>
                 <select value={tagRange.mode} aria-label="Проміжок для тегів" style={{ width: "auto" }}
                   onChange={(ev) => {
                     const mode = ev.target.value;
                     setTagRange((t) => ({ mode,
                       from: t.from || finKey + "-01", to: t.to || lastDayISO(finMonth.y, finMonth.m) }));
                   }}>
-                  <option value="month">{finLabel(finMonth)} — зведено за місяць</option>
+                  <option value="month">{finLabel(finMonth)} · весь місяць</option>
                   <option value="h1">01–15</option>
                   <option value="h2">16–{finDays}</option>
                   <option value="custom">свої дати…</option>
@@ -3151,13 +3189,13 @@ export default function TransferDesk() {
                   </span>
                 )}
               </div>
-              <p style={{ margin: "10px 0 0", color: C.muted, fontSize: 12.5 }}>
+              <Info>
                 Дві половини зводяться пропорційно дням: 01–15 × 15/{finDays} + 16–{finDays} × {finDays - 15}/{finDays}, округлено до цілих.
                 Якщо одну половину не заповнено, береться інша. Клітинку можна змінити вручну — вона підсвітиться, розрахунок видно в підказці. Галочками можна позначити людей і вивантажити їхні теги для таблиці зарплат.
                 Показано всіх, хто є в табелі, і людей зі змінами за переведеннями в цьому місяці. Хто не в табелі — рахується за переведеннями: переведення з середини місяця дає частку пропорційно дням.
                 Теги для ЗП можна взяти не за місяць, а за проміжок: кожен день важить однаково, дні беруться з тієї половини табеля, куди потрапляють;
                 повний місяць усередині проміжку — таким, як його показує фін. облік (з коригуваннями).
-              </p>
+              </Info>
               {repCount > 0 && (
                 <p style={{ margin: "12px 0 0", background: C.signalSoft, border: "1px solid #BFDBFE", borderRadius: 8, padding: "10px 12px", color: C.signal }}>
                   Цифри {repCount} {plural(repCount, "людини", "людей", "людей")} взято зі звіту годин
@@ -3166,9 +3204,10 @@ export default function TransferDesk() {
                 </p>
               )}
               {!finClosed && finOpen.length > 0 && (
-                <p style={{ margin: "12px 0 0", background: C.warnSoft, border: "1px solid #FED7AA", borderRadius: 8, padding: "10px 12px", color: C.warn }}>
-                  Не всі періоди подано: {finOpen.map((t) => t.name + " (" + [!t.h1 && "01–15", !t.h2 && "16–" + finDays].filter(Boolean).join(", ") + ")").join("; ")}.
-                </p>
+                <div style={{ margin: "12px 0 0", background: C.warnSoft, border: "1px solid #FED7AA", borderRadius: 8, padding: "8px 12px", color: C.warn }}>
+                  Не всі періоди подано: {finOpen.length} {plural(finOpen.length, "команда", "команди", "команд")}
+                  <Info title="які саме">{finOpen.map((t) => t.name + " (" + [!t.h1 && "01–15", !t.h2 && "16–" + finDays].filter(Boolean).join(", ") + ")").join("; ")}.</Info>
+                </div>
               )}
               {finClosed && finDrift > 0 && (
                 <p style={{ margin: "12px 0 0", background: C.warnSoft, border: "1px solid #FED7AA", borderRadius: 8, padding: "10px 12px", color: C.warn }}>
