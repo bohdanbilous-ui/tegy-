@@ -126,3 +126,42 @@ export default function TrackerBook({ token, C, card, setToast, onApiError }) {
     </div>
   );
 }
+
+export { call as identityCall };
+
+// Акаунти конкретного співробітника: чипси + додавання. Для картки співробітника й рядка довідника.
+export function TrackerAccounts({ token, employeeId, accounts, systems, onData, setToast, C, compact }) {
+  const [adding, setAdding] = useState(false);
+  const [sys, setSys] = useState("clickup");
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const go = async (body, okText) => {
+    setBusy(true);
+    try { const data = await call(token, "POST", body); onData && onData(data); if (okText) setToast && setToast(okText); return true; }
+    catch (e) { setToast && setToast(e.message); return false; }
+    finally { setBusy(false); }
+  };
+  const chip = { border: "1px solid " + C.line, borderRadius: 999, padding: "2px 10px", fontSize: 12.5, display: "inline-flex", gap: 6, alignItems: "center", background: C.surface };
+  const sysName = (k) => (systems && systems[k]) || k;
+  return (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+      {accounts.map((a) => (
+        <span key={a.sys + a.name + a.email} style={chip} title={a.email}>
+          <span style={{ color: C.muted }}>{sysName(a.sys)}</span> {a.name || a.email}
+          <button aria-label={"Відв'язати " + (a.name || a.email)} disabled={busy} onClick={() => go({ action: "unlink", employeeId, sys: a.sys, person: a.name, email: a.email })} style={{ cursor: "pointer", background: "none", border: "none", color: C.signal }}>×</button>
+        </span>
+      ))}
+      {adding ? (
+        <>
+          <select value={sys} onChange={(e) => setSys(e.target.value)} style={{ border: "1px solid " + C.line, borderRadius: 8, padding: "5px 8px", width: "auto" }} aria-label="Трекер">{Object.entries(systems || {}).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>
+          <input type="text" autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Ім'я або email у трекері" aria-label="Ім'я або email у трекері" style={{ border: "1px solid " + C.line, borderRadius: 8, padding: "5px 9px", width: 200 }} />
+          <button disabled={busy || !name.trim()} onClick={async () => { const v = name.trim(); const ok = await go({ action: "link", sys, person: /@/.test(v) ? "" : v, email: /@/.test(v) ? v : "", employeeId }, "Прив'язано"); if (ok) { setName(""); setAdding(false); } }}
+            style={{ cursor: "pointer", background: C.surface, border: "1px solid " + C.line, borderRadius: 8, padding: "5px 10px" }}>Додати</button>
+          <button onClick={() => setAdding(false)} style={{ cursor: "pointer", background: "none", border: "none", color: C.muted }}>скасувати</button>
+        </>
+      ) : (
+        <button onClick={() => setAdding(true)} style={{ cursor: "pointer", background: C.surface, border: "1px solid " + C.line, borderRadius: 8, padding: compact ? "1px 8px" : "3px 10px", fontSize: 12.5, color: C.ink2 }}>{accounts.length ? "+" : "+ акаунт у трекері"}</button>
+      )}
+    </div>
+  );
+}

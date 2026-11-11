@@ -15,7 +15,7 @@ import Reminders from "./Reminders";
 import PayDesk from "./PayDesk";
 import PfChanges from "./PfChanges";
 import PmDesk, { LoansAdmin, ReconAdmin } from "./PmDesk";
-import TrackerBook from "./TrackerBook";
+import TrackerBook, { TrackerAccounts, identityCall } from "./TrackerBook";
 
 /* Вхід через Google: NEXT_PUBLIC_GOOGLE_CLIENT_ID і NEXT_PUBLIC_ALLOWED_DOMAIN.
    Токен перевіряється на сервері (app/api/state/route.js). */
@@ -511,6 +511,8 @@ export default function TransferDesk() {
 
   const [selectedId, setSelectedId] = useState("");
   const [cardId, setCardId] = useState(null);
+  const [ident, setIdent] = useState(null); // { systems, byId } — акаунти співробітників у трекерах (лише адміністратор)
+  const putIdent = (data) => setIdent({ systems: data.systems, byId: Object.fromEntries((data.people || []).map((p) => [p.id, p.accounts])) });
   const [editId, setEditId] = useState(null);
   const [edit, setEdit] = useState(null);
   const [editErrors, setEditErrors] = useState([]);
@@ -761,6 +763,11 @@ export default function TransferDesk() {
      обліковим записом (lib/users.js), а не тут. ─────────────────────────── */
   const role = roleOf(user);
   const isAdmin = role === "admin";
+  useEffect(() => { if (book === "notrack") setIdent(null); }, [book]); // після імпорту у «Трекерах» картка перечитає акаунти
+  useEffect(() => {
+    if (!isAdmin || !tokenRef.current || ident || !((tab === "lists" && book === "emp") || cardId)) return;
+    identityCall(tokenRef.current, "GET").then(putIdent).catch(() => {});
+  }, [isAdmin, tab, book, cardId, ident]);
   const isHrd = role === "hrd";
   const isAcc = role === "accountant";
   // Бухгалтер працює лише у відомостях ЗП.
@@ -3906,6 +3913,9 @@ export default function TransferDesk() {
                                   <div style={{ color: C.muted, fontSize: 11.5, marginTop: 2 }}>
                                     {[e.extId && "ід " + e.extId, e.pfId && "PeopleForce"].filter(Boolean).join(" · ")}
                                   </div>
+                                  {ident && (ident.byId[e.id] || []).length > 0 && (
+                                    <div style={{ color: C.muted, fontSize: 11.5, marginTop: 2 }}>{(ident.byId[e.id] || []).map((a) => (ident.systems[a.sys] || a.sys) + ": " + (a.name || a.email)).join(" · ")}</div>
+                                  )}
                                   {e.leftOn && (
                                     <div style={{ color: C.stop, fontSize: 11.5, marginTop: 2 }}>{e.leftOn < today ? "звільнено" : "звільняється"} {fmt(e.leftOn)}</div>
                                   )}
@@ -4218,6 +4228,13 @@ export default function TransferDesk() {
                 </div>
                 <button className="del" onClick={() => setCardId(null)} aria-label="Закрити">✕</button>
               </div>
+
+              {isAdmin && ident && (
+                <div style={{ padding: "12px 22px", borderBottom: "1px solid " + C.lineSoft }}>
+                  <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 6 }}>Акаунти в трекерах (ClickUp, Redmine){cardEmp.email ? " · email в Allocate: " + cardEmp.email : ""}</div>
+                  <TrackerAccounts token={tokenRef.current} employeeId={cardEmp.id} accounts={ident.byId[cardEmp.id] || []} systems={ident.systems} onData={putIdent} setToast={setToast} C={C} />
+                </div>
+              )}
 
               <div style={{ padding: "16px 22px" }}>
                 {now.map((x) => (
