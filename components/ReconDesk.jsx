@@ -42,6 +42,7 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
   const [text, setText] = useState("");
   const [showAdmin, setShowAdmin] = useState(false);
   const [cfg, setCfg] = useState(null);
+  const [aliasText, setAliasText] = useState("");
 
   const run = useCallback(async (method, body, per) => {
     setBusy(true);
@@ -122,6 +123,23 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
                   <button className="ghost" disabled={busy || !text.trim()} onClick={async () => { const ok = await post("hours-set", { text }, "Години завантажено"); if (ok) setText(""); }}>Завантажити</button>
                   {d.hours && <button className="link" style={{ color: C.stop }} disabled={busy} onClick={() => { if (window.confirm("Прибрати завантажені години за цей період? Підтвердження звірки лишаться, але покажуть застарілими.")) post("hours-clear", {}, "Години прибрано"); }}>прибрати завантажене</button>}
                 </div>
+                <div style={{ display: "grid", gap: 6, fontSize: 12.5, color: C.muted }}>
+                  <label>Відповідність імен: у трекерах люди записані англійською, в Allocate — українським ПІБ. По рядку: «English Name; Український ПІБ» (ПІБ як в Allocate). Після завантаження годин система сама підкаже схожі імена.
+                    <textarea rows={3} value={aliasText} onChange={(e) => setAliasText(e.target.value)} placeholder={"Ivan Petrenko; Петренко Іван Іванович"} style={{ width: "100%", marginTop: 4, fontFamily: "inherit" }} />
+                  </label>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <button className="ghost" disabled={busy || !aliasText.trim()} onClick={async () => { const r = await post("alias-bulk", { text: aliasText }, "Відповідність збережено"); if (r) setAliasText(""); }}>Зберегти відповідність</button>
+                    {d.aliases && d.aliases.length > 0 && <span>Збережено: {d.aliases.length}</span>}
+                  </div>
+                  {d.aliasBad && d.aliasBad.length > 0 && <span style={{ color: C.warn }}>Не прочитано рядків: {d.aliasBad.length} (ПІБ має збігатися з Allocate).</span>}
+                  {d.aliases && d.aliases.length > 0 && (
+                    <details><summary style={{ cursor: "pointer" }}>Показати збережені</summary>
+                      <div style={{ display: "grid", gap: 2, marginTop: 6 }}>
+                        {d.aliases.map((a) => <div key={a.person}>{a.person} → <b>{a.name}</b> <button className="link" disabled={busy} onClick={() => post("alias-clear", { person: a.person })}>прибрати</button></div>)}
+                      </div>
+                    </details>
+                  )}
+                </div>
                 {cfg && (
                   <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", fontSize: 12.5, color: C.muted }}>
                     {[["tol", "Допуск, п.п."], ["tolSmall", "Допуск для малих часток, п.п."], ["smallUpTo", "Мала частка — до, %"]].map(([k, l]) => (
@@ -141,8 +159,16 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
           <b style={{ color: C.warn }}>Години, які не вдалося віднести до жодного PM: {d.unmatched.length}</b>
           <span style={{ color: C.muted, fontSize: 12.5 }}>Людини немає в Allocate (інше написання імені, зовнішній виконавець) або проєкт із трекера не збігається з проєктом Allocate. Виправте назву в таблиці годин і завантажте її знову.</span>
           <div style={{ overflowX: "auto" }}><table>
-            <thead><tr><th>Людина</th><th>Проєкт</th><th className="num">Години</th><th>Що не збіглося</th></tr></thead>
-            <tbody>{d.unmatched.slice(0, 50).map((u, i) => <tr key={i}><td>{u.person}</td><td>{u.project}</td><td className="num">{num(u.hours)}</td><td>{u.why === "person" ? "людини немає в Allocate" : u.why === "project" ? "проєкту немає в Allocate" : "ні людини, ні проєкту"}</td></tr>)}</tbody>
+            <thead><tr><th>Людина</th><th>Проєкт</th><th className="num">Години</th><th>Що не збіглося</th><th>Зіставити з людиною Allocate</th></tr></thead>
+            <tbody>{d.unmatched.slice(0, 50).map((u, i) => <tr key={i}><td>{u.person}</td><td>{u.project}</td><td className="num">{num(u.hours)}</td><td>{u.why === "person" ? "людини немає в Allocate" : u.why === "project" ? "проєкту немає в Allocate" : "ні людини, ні проєкту"}</td>
+              <td>{isAdmin && u.why !== "project" ? (
+                <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                  {u.suggest && <button className="ghost" disabled={busy} onClick={() => post("alias-set", { person: u.person, employeeId: u.suggest.employeeId }, "Відповідність збережено")}>Це {u.suggest.name}</button>}
+                  <select defaultValue="" onChange={(e) => { if (e.target.value) post("alias-set", { person: u.person, employeeId: e.target.value }, "Відповідність збережено"); }} style={{ width: "auto", maxWidth: 220 }} aria-label={"Зіставити " + u.person}>
+                    <option value="">{u.suggest ? "інша людина…" : "обрати людину…"}</option>
+                    {(d.people || []).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+                  </select>
+                </span>) : <span style={{ color: C.muted, fontSize: 12.5 }}>{u.why === "project" ? "виправте назву проєкту в таблиці" : "лише адміністратор"}</span>}</td></tr>)}</tbody>
           </table></div>
           {d.unmatched.length > 50 && <span style={{ color: C.muted, fontSize: 12.5 }}>…і ще {d.unmatched.length - 50}</span>}
         </section>

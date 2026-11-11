@@ -5,7 +5,7 @@ import { sameName } from "../../../lib/users";
 import { isPm } from "../../../lib/pms";
 import { orderProjects } from "../../../lib/projects";
 import { PERIOD_RE, periodRange, keyOfDate, prevKey, addDays } from "../../../lib/loans";
-import { HOURS_KEY, CONF_KEY, CFG_KEY, ACTIONS, cleanCfg, reconRows, needsDecision, fingerprint, parseHoursText, rowKey, unmatchedHours } from "../../../lib/recon";
+import { HOURS_KEY, CONF_KEY, CFG_KEY, ACTIONS, cleanCfg, reconRows, needsDecision, fingerprint, parseHoursText, rowKey, unmatchedHours, ALIAS_KEY, parseAliasText } from "../../../lib/recon";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +14,8 @@ export const dynamic = "force-dynamic";
    POST { action: "hours-set", period, text }   — адміністратор: завантажити години («людина; проєкт; години»).
    POST { action: "hours-clear", period }       — адміністратор.
    POST { action: "cfg-set", tol, tolSmall, smallUpTo } — адміністратор: допуск у п.п.
+   POST { action: "alias-set", person, employeeId } / { action: "alias-bulk", text } / { action: "alias-clear", person }
+        — адміністратор: відповідність англійських імен із трекерів українським ПІБ («English Name; Український ПІБ»).
    POST { action: "resolve", period, employeeId, project, kind: plan|tracker|manual, comment, hours? } — PM: рішення по рядку.
    POST { action: "resolve-clear", period, employeeId, project }
    POST { action: "confirm", period }           — PM: підтвердити звірку своїх проєктів (усі відхилення мають рішення).
@@ -55,13 +57,13 @@ function lastFinished(today) {
 }
 
 async function load(period) {
-  const [state, hoursAll, confAll, cfg, deputies] = await Promise.all([
-    readState(), readKey(HOURS_KEY), readKey(CONF_KEY), readKey(CFG_KEY), readKey(DEPUTIES_KEY),
+  const [state, hoursAll, confAll, cfg, deputies, aliases] = await Promise.all([
+    readState(), readKey(HOURS_KEY), readKey(CONF_KEY), readKey(CFG_KEY), readKey(DEPUTIES_KEY), readKey(ALIAS_KEY),
   ]);
   return {
     state: state || {}, hours: (hoursAll || {})[period] || null, hoursAll: hoursAll || {},
     conf: (confAll || {})[period] || { res: {}, ok: {} }, confAll: confAll || {},
-    cfg: cleanCfg(cfg), deputies: deputies || [],
+    cfg: cleanCfg(cfg), deputies: deputies || [], aliases: aliases || {},
   };
 }
 
@@ -71,7 +73,7 @@ function build(d, me, period) {
   const tomb = d.state.deleted || {};
   const employees = (d.state.employees || []).filter((e) => !tomb["e:" + e.id]);
   const transfers = (d.state.transfers || []).filter((t) => !tomb["t:" + t.id]);
-  const rows = reconRows({ key: period, employees, transfers, projects, hours: d.hours, res: d.conf.res, cfg: d.cfg, entries: d.state.entries });
+  const rows = reconRows({ key: period, employees, transfers, projects, hours: d.hours, res: d.conf.res, cfg: d.cfg, entries: d.state.entries, aliases: d.aliases });
   const finished = periodRange(period).to < today;
   const byProject = {};
   rows.forEach((r) => { (byProject[r.project] = byProject[r.project] || []).push(r); });
@@ -86,8 +88,9 @@ function build(d, me, period) {
       by: ok ? ok.by : "", at: ok ? ok.at : "", fp,
     };
   });
-  const unmatched = me.role === "pm" ? undefined : unmatchedHours({ hours: d.hours, employees, projects: liveProjects(d.state) });
-  const base = { period, today, finished, cfg: d.cfg, unmatched, hours: d.hours ? { at: d.hours.at, by: d.hours.by, count: d.hours.rows.length } : null, summary };
+  const unmatched = me.role === "pm" ? undefined : unmatchedHours({ hours: d.hours, employees, projects: liveProjects(d.state), aliases: d.aliases });
+  const aliasList = me.role === "admin" ? Object.keys(d.aliases).map((k) => { const e = employees.find((x) => x.id === d.aliases[k]); return e ? { person: k, employeeId: e.id, name: e.name } : null; }).filter(Boolean) : undefined;
+  const base = { period, today, finished, cfg: d.cfg, unmatched, aliases: aliasList, people: me.role === "admin" ? employees.map((e) => ({ id: e.id, name: e.name })) : undefined, hours: d.hours ? { at: d.hours.at, by: d.hours.by, count: d.hours.rows.length } : null, summary };
   if (me.role === "accountant") return base;
   return { ...base, rows, me: { name: me.name, role: me.role }, actions: ACTIONS, defaultPeriod: lastFinished(today) };
 }
@@ -107,10 +110,36 @@ export async function POST(request) {
   const me = g.me;
   let b; try { b = await request.json(); } catch (e) { return bad("Некоректний запит."); }
   const period = String(b.period || "");
-  if (b.action !== "cfg-set" && !PERIOD_RE.test(period)) return bad("Невірний період.");
+  const periodless = ["cfg-set", "alias-set", "alias-bulk", "alias-clear"].includes(b.action);
+  if (!periodless && !PERIOD_RE.test(period)) return bad("Невірний період.");
   const d = await load(period);
   const reply = () => NextResponse.json(build(d, me, period));
   const isAdmin = me.role === "admin";
+
+  if (b.action === "alias-set" || b.action === "alias-bulk" || b.action === "alias-clear") {
+    if (!isAdmin) return bad("Це може лише адміністратор.", 403);
+    const tomb = d.state.deleted || {};
+    const employees = (d.state.employees || []).filter((e) => !tomb["e:" + e.id]);
+    const next = { ...d.aliases };
+    const key = (v) => String(v || "").trim().toLowerCase().replace(/\s+/g, " ");
+    if (b.action === "alias-clear") delete next[key(b.person)];
+    else if (b.action === "alias-set") {
+      if (!key(b.person) || !employees.some((e) => e.id === b.employeeId)) return bad("Оберіть людину зі списку Allocate.");
+      next[key(b.person)] = b.employeeId;
+    } else {
+      const p = parseAliasText(b.text, employees);
+      if (!Object.keys(p.map).length && p.bad.length) return bad("Не вдалося прочитати: " + p.bad.slice(0, 5).map((x) => "рядок " + x.line + " «" + x.text + "»").join("; ") + ". Формат: English Name; Український ПІБ (ПІБ має збігатися з Allocate).");
+      Object.assign(next, p.map);
+      if (p.bad.length) d.aliasBad = p.bad;
+    }
+    await writeKey(ALIAS_KEY, next);
+    d.aliases = next;
+    const per = PERIOD_RE.test(period) ? period : lastFinished(kyivToday());
+    d.hours = d.hoursAll[per] || null; d.conf = (d.confAll[per] || { res: {}, ok: {} });
+    const out = build(d, me, per);
+    if (d.aliasBad) out.aliasBad = d.aliasBad;
+    return NextResponse.json(out);
+  }
 
   if (b.action === "hours-set" || b.action === "hours-clear" || b.action === "cfg-set") {
     if (!isAdmin) return bad("Це може лише адміністратор.", 403);
