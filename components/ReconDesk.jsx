@@ -43,6 +43,7 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
   const [aliasText, setAliasText] = useState("");
   const [showSettings, setShowSettings] = useState(false);
   const [cfg, setCfg] = useState(null);
+  const [nt, setNt] = useState(null);
   const [filter, setFilter] = useState("attn");
   const [expanded, setExpanded] = useState({});
 
@@ -90,6 +91,7 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
       return <span style={{ color: C.ink2, fontSize: 12.5 }}><b>{A}</b>{r.res.action === "manual" ? " · " + num(r.res.hours) + " год" : ""} · «{r.res.comment}»</span>;
     }
     if (r.state === "ok") return <span style={{ color: "#15803D", fontSize: 12.5 }}>✓</span>;
+    if (r.state === "notrack") return <span style={{ color: C.muted, fontSize: 12.5 }}>не веде облік годин — розподіл за домовленістю</span>;
     if (r.state === "nosource") return <span style={{ color: C.muted, fontSize: 12.5 }}>годин ще немає</span>;
     if (r.state === "nodata") return <span style={{ color: C.warn, fontWeight: 600, fontSize: 12.5 }}>немає годин у трекері</span>;
     return <span style={{ color: C.warn, fontWeight: 600, fontSize: 12.5 }}>понад ±{r.tol} п.п.</span>;
@@ -203,6 +205,32 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
                     </div>
                   </details>
                 )}
+                {d.teamsList && (() => {
+                  const cur = nt || d.noTrack || { teams: [], employees: [] };
+                  const toggle = (k, id) => setNt({ ...cur, [k]: cur[k].includes(id) ? cur[k].filter((x) => x !== id) : [...cur[k], id] });
+                  const nameOf = (id) => ((d.people || []).find((p) => p.id === id) || {}).name || id;
+                  return (
+                    <div style={{ display: "grid", gap: 8, fontSize: 12.5, color: C.muted }}>
+                      <div><b>Не ведуть облік годин</b> (адмін-блок, People Partners, рекрутинг тощо): для них звірка не вимагає годин із трекера, розподіл ви збираєте вручну.</div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {d.teamsList.map((t) => (
+                          <label key={t.id} style={{ border: "1px solid " + C.line, borderRadius: 999, padding: "3px 10px", cursor: "pointer" }}>
+                            <input type="checkbox" checked={cur.teams.includes(t.id)} onChange={() => toggle("teams", t.id)} style={{ marginRight: 6 }} />{t.name}
+                          </label>
+                        ))}
+                        {!d.teamsList.length && <span>Команд ще немає.</span>}
+                      </div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                        <select value="" onChange={(e) => { if (e.target.value && !cur.employees.includes(e.target.value)) setNt({ ...cur, employees: [...cur.employees, e.target.value] }); }} style={{ width: "auto", maxWidth: 240 }} aria-label="Додати людину, яка не веде облік">
+                          <option value="">+ окрема людина…</option>
+                          {(d.people || []).filter((p) => !cur.employees.includes(p.id)).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                        </select>
+                        {cur.employees.map((id) => <span key={id} style={{ border: "1px solid " + C.line, borderRadius: 999, padding: "3px 10px" }}>{nameOf(id)} <button className="link" onClick={() => toggle("employees", id)} aria-label={"Прибрати " + nameOf(id)}>×</button></span>)}
+                      </div>
+                      <div><button className="ghost" disabled={busy || !nt} onClick={async () => { const r = await post("notrack-set", { teams: cur.teams, employees: cur.employees }, "Збережено"); if (r) setNt(null); }}>Зберегти</button></div>
+                    </div>
+                  );
+                })()}
                 {cfg && (
                   <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", fontSize: 12.5, color: C.muted }}>
                     {[["tol", "Допуск, п.п."], ["tolSmall", "Для малих часток, п.п."], ["smallUpTo", "Мала частка — до, %"]].map(([k, l]) => (

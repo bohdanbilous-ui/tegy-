@@ -5,7 +5,7 @@ import { sameName } from "../../../lib/users";
 import { isPm } from "../../../lib/pms";
 import { orderProjects } from "../../../lib/projects";
 import { PERIOD_RE, periodRange, keyOfDate, prevKey, addDays } from "../../../lib/loans";
-import { HOURS_KEY, CONF_KEY, CFG_KEY, ACTIONS, cleanCfg, reconRows, needsDecision, fingerprint, parseHoursText, rowKey, unmatchedHours, ALIAS_KEY, parseAliasText } from "../../../lib/recon";
+import { HOURS_KEY, CONF_KEY, CFG_KEY, ACTIONS, cleanCfg, reconRows, needsDecision, fingerprint, parseHoursText, rowKey, unmatchedHours, ALIAS_KEY, parseAliasText, NOTRACK_KEY, cleanNoTrack } from "../../../lib/recon";
 
 export const dynamic = "force-dynamic";
 
@@ -57,13 +57,13 @@ function lastFinished(today) {
 }
 
 async function load(period) {
-  const [state, hoursAll, confAll, cfg, deputies, aliases] = await Promise.all([
-    readState(), readKey(HOURS_KEY), readKey(CONF_KEY), readKey(CFG_KEY), readKey(DEPUTIES_KEY), readKey(ALIAS_KEY),
+  const [state, hoursAll, confAll, cfg, deputies, aliases, noTrack] = await Promise.all([
+    readState(), readKey(HOURS_KEY), readKey(CONF_KEY), readKey(CFG_KEY), readKey(DEPUTIES_KEY), readKey(ALIAS_KEY), readKey(NOTRACK_KEY),
   ]);
   return {
     state: state || {}, hours: (hoursAll || {})[period] || null, hoursAll: hoursAll || {},
     conf: (confAll || {})[period] || { res: {}, ok: {} }, confAll: confAll || {},
-    cfg: cleanCfg(cfg), deputies: deputies || [], aliases: aliases || {},
+    cfg: cleanCfg(cfg), deputies: deputies || [], aliases: aliases || {}, noTrack: cleanNoTrack(noTrack),
   };
 }
 
@@ -73,7 +73,7 @@ function build(d, me, period) {
   const tomb = d.state.deleted || {};
   const employees = (d.state.employees || []).filter((e) => !tomb["e:" + e.id]);
   const transfers = (d.state.transfers || []).filter((t) => !tomb["t:" + t.id]);
-  const rows = reconRows({ key: period, employees, transfers, projects, hours: d.hours, res: d.conf.res, cfg: d.cfg, entries: d.state.entries, aliases: d.aliases, teams: d.state.teams, pms: d.state.pms });
+  const rows = reconRows({ key: period, employees, transfers, projects, hours: d.hours, res: d.conf.res, cfg: d.cfg, entries: d.state.entries, aliases: d.aliases, teams: d.state.teams, pms: d.state.pms, noTrack: d.noTrack });
   const finished = periodRange(period).to < today;
   const byProject = {};
   rows.forEach((r) => { (byProject[r.project] = byProject[r.project] || []).push(r); });
@@ -90,7 +90,7 @@ function build(d, me, period) {
   });
   const unmatched = me.role === "pm" ? undefined : unmatchedHours({ hours: d.hours, employees, projects: liveProjects(d.state), aliases: d.aliases });
   const aliasList = me.role === "admin" ? Object.keys(d.aliases).map((k) => { const e = employees.find((x) => x.id === d.aliases[k]); return e ? { person: k, employeeId: e.id, name: e.name } : null; }).filter(Boolean) : undefined;
-  const base = { period, today, finished, cfg: d.cfg, unmatched, aliases: aliasList, people: me.role === "admin" ? employees.map((e) => ({ id: e.id, name: e.name })) : undefined, hours: d.hours ? { at: d.hours.at, by: d.hours.by, count: d.hours.rows.length } : null, summary };
+  const base = { period, today, finished, cfg: d.cfg, unmatched, aliases: aliasList, noTrack: me.role === "admin" ? d.noTrack : undefined, teamsList: me.role === "admin" ? (d.state.teams || []).filter((t) => !tomb["tm:" + t.id]).map((t) => ({ id: t.id, name: t.name })) : undefined, people: me.role === "admin" ? employees.map((e) => ({ id: e.id, name: e.name })) : undefined, hours: d.hours ? { at: d.hours.at, by: d.hours.by, count: d.hours.rows.length } : null, summary };
   if (me.role === "accountant") return base;
   return { ...base, rows, me: { name: me.name, role: me.role }, actions: ACTIONS, defaultPeriod: lastFinished(today) };
 }
@@ -110,11 +110,26 @@ export async function POST(request) {
   const me = g.me;
   let b; try { b = await request.json(); } catch (e) { return bad("Некоректний запит."); }
   const period = String(b.period || "");
-  const periodless = ["cfg-set", "alias-set", "alias-bulk", "alias-clear"].includes(b.action);
+  const periodless = ["cfg-set", "alias-set", "alias-bulk", "alias-clear", "notrack-set"].includes(b.action);
   if (!periodless && !PERIOD_RE.test(period)) return bad("Невірний період.");
   const d = await load(period);
   const reply = () => NextResponse.json(build(d, me, period));
   const isAdmin = me.role === "admin";
+
+  if (b.action === "notrack-set") {
+    if (!isAdmin) return bad("Це може лише адміністратор.", 403);
+    const tomb = d.state.deleted || {};
+    const teamIds = new Set((d.state.teams || []).filter((t) => !tomb["tm:" + t.id]).map((t) => t.id));
+    const empIds = new Set((d.state.employees || []).filter((e) => !tomb["e:" + e.id]).map((e) => e.id));
+    const v = cleanNoTrack(b);
+    v.teams = v.teams.filter((x) => teamIds.has(x));
+    v.employees = v.employees.filter((x) => empIds.has(x));
+    await writeKey(NOTRACK_KEY, v);
+    d.noTrack = v;
+    const per = PERIOD_RE.test(period) ? period : lastFinished(kyivToday());
+    d.hours = d.hoursAll[per] || null; d.conf = d.confAll[per] || { res: {}, ok: {} };
+    return NextResponse.json(build(d, me, per));
+  }
 
   if (b.action === "alias-set" || b.action === "alias-bulk" || b.action === "alias-clear") {
     if (!isAdmin) return bad("Це може лише адміністратор.", 403);
