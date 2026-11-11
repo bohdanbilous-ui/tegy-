@@ -91,7 +91,7 @@ function build(d, me, period) {
   });
   const unmatched = me.role === "pm" ? undefined : unmatchedHours({ hours: d.hours, employees, projects: liveProjects(d.state), aliases: { ...d.identAliases, ...d.aliases } });
   const aliasList = me.role === "admin" ? Object.keys(d.aliases).map((k) => { const e = employees.find((x) => x.id === d.aliases[k]); return e ? { person: k, employeeId: e.id, name: e.name } : null; }).filter(Boolean) : undefined;
-  const base = { period, today, finished, cfg: d.cfg, unmatched, aliases: aliasList, noTrack: me.role === "admin" ? d.noTrack : undefined, teamsList: me.role === "admin" ? (d.state.teams || []).filter((t) => !tomb["tm:" + t.id]).map((t) => ({ id: t.id, name: t.name })) : undefined, people: me.role === "admin" ? employees.map((e) => ({ id: e.id, name: e.name })) : undefined, hours: d.hours ? { at: d.hours.at, by: d.hours.by, count: d.hours.rows.length } : null, summary };
+  const base = { period, today, finished, cfg: d.cfg, unmatched, aliases: aliasList, noTrack: me.role === "admin" ? d.noTrack : undefined, departmentsList: me.role === "admin" ? [...new Set(employees.flatMap((e) => [e.department, e.division]).filter(Boolean).map((x) => String(x).trim()))].sort((a, b) => a.localeCompare(b, "uk")) : undefined, teamsList: me.role === "admin" ? (d.state.teams || []).filter((t) => !tomb["tm:" + t.id]).map((t) => ({ id: t.id, name: t.name })) : undefined, people: me.role === "admin" ? employees.map((e) => ({ id: e.id, name: e.name })) : undefined, hours: d.hours ? { at: d.hours.at, by: d.hours.by, count: d.hours.rows.length } : null, summary };
   if (me.role === "accountant") return base;
   return { ...base, rows, me: { name: me.name, role: me.role }, actions: ACTIONS, defaultPeriod: lastFinished(today) };
 }
@@ -125,6 +125,8 @@ export async function POST(request) {
     const v = cleanNoTrack(b);
     v.teams = v.teams.filter((x) => teamIds.has(x));
     v.employees = v.employees.filter((x) => empIds.has(x));
+    const known = new Set((d.state.employees || []).filter((e) => !tomb["e:" + e.id]).flatMap((e) => [e.department, e.division]).filter(Boolean).map((x) => String(x).trim().toLowerCase()));
+    v.departments = v.departments.filter((x) => known.has(x.toLowerCase()));
     await writeKey(NOTRACK_KEY, v);
     d.noTrack = v;
     const per = PERIOD_RE.test(period) ? period : lastFinished(kyivToday());

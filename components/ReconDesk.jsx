@@ -298,14 +298,14 @@ export function NoTrackBook({ token, C, card, setToast, onApiError }) {
     setBusy(true);
     try {
       const data = await reconCall(token, body ? "POST" : "GET", body || null, undefined);
-      setD(data); setCur({ teams: data.noTrack.teams, employees: data.noTrack.employees });
+      setD(data); setCur({ teams: data.noTrack.teams, employees: data.noTrack.employees, departments: data.noTrack.departments || [] });
       return data;
     } catch (e) { if (e.status === 401) onApiError && onApiError(e); else setToast(e.message); return null; }
     finally { setBusy(false); }
   }, [token]);
   useEffect(() => { load(); }, []);
   if (!d || !cur) return <section style={{ ...card, padding: 22, color: C.muted }}>Завантажуємо…</section>;
-  const dirty = JSON.stringify([...cur.teams].sort()) !== JSON.stringify([...d.noTrack.teams].sort()) || JSON.stringify([...cur.employees].sort()) !== JSON.stringify([...d.noTrack.employees].sort());
+  const dirty = JSON.stringify([...cur.teams].sort()) !== JSON.stringify([...d.noTrack.teams].sort()) || JSON.stringify([...cur.employees].sort()) !== JSON.stringify([...d.noTrack.employees].sort()) || JSON.stringify([...cur.departments].sort()) !== JSON.stringify([...(d.noTrack.departments || [])].sort());
   const toggle = (k, id) => setCur({ ...cur, [k]: cur[k].includes(id) ? cur[k].filter((x) => x !== id) : [...cur[k], id] });
   const nameOf = (id) => ((d.people || []).find((p) => p.id === id) || {}).name || id;
   const chip = { border: "1px solid " + C.line, borderRadius: 999, padding: "3px 10px", fontSize: 13 };
@@ -313,7 +313,7 @@ export function NoTrackBook({ token, C, card, setToast, onApiError }) {
     <section style={{ ...card, padding: 22, maxWidth: 720, display: "grid", gap: 14 }}>
       <div>
         <h2 style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>Облік годин</h2>
-        <p style={{ margin: "6px 0 0", color: C.ink2, fontSize: 13.5 }}>Команди й люди, які не ведуть години в трекері (адмін-блок, People Partners, рекрутинг). У звірці PM для них немає позначки «немає годин у трекері» — розподіл збираєте ви вручну.</p>
+        <p style={{ margin: "6px 0 0", color: C.ink2, fontSize: 13.5 }}>Команди, відділи та люди, які не ведуть години в трекері (адмін-блок, People Partners, рекрутинг, customer care). У звірці PM для них немає позначки «немає годин у трекері» — розподіл збираєте ви вручну.</p>
       </div>
       <div>
         <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 6 }}>Команди</div>
@@ -326,6 +326,18 @@ export function NoTrackBook({ token, C, card, setToast, onApiError }) {
           {!d.teamsList.length && <span style={{ color: C.muted }}>Команд ще немає.</span>}
         </div>
       </div>
+      {(d.departmentsList || []).length > 0 && (
+        <div>
+          <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 6 }}>Відділи й підрозділи (з PeopleForce)</div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {d.departmentsList.map((n) => (
+              <label key={n} style={{ ...chip, cursor: "pointer", background: cur.departments.includes(n) ? C.signalSoft : C.surface }}>
+                <input type="checkbox" checked={cur.departments.includes(n)} onChange={() => toggle("departments", n)} style={{ marginRight: 6 }} />{n}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
       <div>
         <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 6 }}>Окремі люди</div>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
@@ -337,7 +349,7 @@ export function NoTrackBook({ token, C, card, setToast, onApiError }) {
         </div>
       </div>
       <div>
-        <button disabled={busy || !dirty} onClick={async () => { const r = await load({ action: "notrack-set", teams: cur.teams, employees: cur.employees }); if (r) setToast("Збережено"); }}
+        <button disabled={busy || !dirty} onClick={async () => { const r = await load({ action: "notrack-set", teams: cur.teams, employees: cur.employees, departments: cur.departments }); if (r) setToast("Збережено"); }}
           style={{ cursor: dirty ? "pointer" : "default", opacity: dirty ? 1 : 0.5, background: C.signal, color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontWeight: 600 }}>Зберегти</button>
       </div>
     </section>
