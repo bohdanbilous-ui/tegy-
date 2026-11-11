@@ -40,9 +40,11 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
   const [openRow, setOpenRow] = useState(null);
   const [form, setForm] = useState({ kind: "plan", comment: "", hours: "" });
   const [text, setText] = useState("");
-  const [showAdmin, setShowAdmin] = useState(false);
-  const [cfg, setCfg] = useState(null);
   const [aliasText, setAliasText] = useState("");
+  const [showSettings, setShowSettings] = useState(false);
+  const [cfg, setCfg] = useState(null);
+  const [filter, setFilter] = useState("attn");
+  const [expanded, setExpanded] = useState({});
 
   const run = useCallback(async (method, body, per) => {
     setBusy(true);
@@ -66,25 +68,32 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
   const isAdmin = d.me && d.me.role === "admin";
   const cur = period || d.period;
   const choices = [d.defaultPeriod, prevKey(d.defaultPeriod), nextKey(d.defaultPeriod)];
+  const needsDecision = (r) => (r.state === "warn" || r.state === "nodata") && !r.res;
+  const isAttn = (r) => r.state === "warn" || r.state === "nodata" || !!r.res;
   const byProject = {};
   d.rows.forEach((r) => { (byProject[r.project] = byProject[r.project] || []).push(r); });
-  const sumOf = (p) => d.summary.find((s) => s.project === p);
-  const needsDecision = (r) => (r.state === "warn" || r.state === "nodata") && !r.res;
-  const anyOpen = d.rows.some(needsDecision);
-  const allConfirmed = d.summary.length > 0 && d.summary.every((s) => s.state === "confirmed");
-  const canConfirm = d.finished && d.hours && d.summary.length > 0 && !anyOpen && !allConfirmed;
+  const sumOf = (p) => d.summary.find((s) => s.project === p) || {};
+  const openCount = d.rows.filter(needsDecision).length;
+  const attnCount = d.rows.filter(isAttn).length;
+  const sharedCount = d.rows.filter((r) => r.shared).length;
+  const confirmedCount = d.summary.filter((s) => s.state === "confirmed").length;
+  const allConfirmed = d.summary.length > 0 && confirmedCount === d.summary.length;
+  const canConfirm = d.finished && d.hours && d.summary.length > 0 && !openCount && !allConfirmed;
+  const pass = (r) => (filter === "all" ? true : filter === "shared" ? r.shared : isAttn(r));
+  const hint = allConfirmed ? "" : !d.finished ? "Період ще триває — підтвердити можна після його завершення."
+    : !d.hours ? "Годин за період ще немає — їх завантажує адміністратор."
+    : openCount ? "Оберіть дію по " + openCount + " відхиленнях, і тоді можна підтверджувати." : "Усе перевірено — можна підтверджувати.";
 
   const stateCell = (r) => {
     if (r.res) {
       const A = d.actions[r.res.action] || r.res.action;
       return <span style={{ color: C.ink2, fontSize: 12.5 }}><b>{A}</b>{r.res.action === "manual" ? " · " + num(r.res.hours) + " год" : ""} · «{r.res.comment}»</span>;
     }
-    if (r.state === "ok") return <span style={{ color: "#15803D", fontSize: 12.5 }}>✓ у межах допуску</span>;
+    if (r.state === "ok") return <span style={{ color: "#15803D", fontSize: 12.5 }}>✓</span>;
     if (r.state === "nosource") return <span style={{ color: C.muted, fontSize: 12.5 }}>годин ще немає</span>;
     if (r.state === "nodata") return <span style={{ color: C.warn, fontWeight: 600, fontSize: 12.5 }}>немає годин у трекері</span>;
-    return <span style={{ color: C.warn, fontWeight: 600, fontSize: 12.5 }}>відхилення понад ±{r.tol} п.п.</span>;
+    return <span style={{ color: C.warn, fontWeight: 600, fontSize: 12.5 }}>понад ±{r.tol} п.п.</span>;
   };
-
   const startDecide = (r) => {
     setOpenRow(r.employeeId + "|" + r.project);
     setForm(r.res ? { kind: r.res.action, comment: r.res.comment, hours: r.res.hours != null ? String(r.res.hours) : "" } : { kind: "plan", comment: "", hours: r.trackerHours != null ? String(r.trackerHours) : "" });
@@ -93,56 +102,110 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
     const ok = await post("resolve", { employeeId: r.employeeId, project: r.project, kind: form.kind, comment: form.comment, hours: form.hours }, "Рішення збережено");
     if (ok) setOpenRow(null);
   };
+  const chip = (k, label, n) => (
+    <button key={k} onClick={() => setFilter(k)} aria-pressed={filter === k}
+      style={{ cursor: "pointer", border: "1px solid " + (filter === k ? C.signal : C.line), background: filter === k ? C.signalSoft : C.surface, color: filter === k ? C.signal : C.ink2, borderRadius: 999, padding: "4px 12px", fontSize: 12.5, fontWeight: 600 }}>
+      {label} · {n}
+    </button>
+  );
+
+  // Хто ця людина: команда й посада, позначка «спільний», і куди ще розподілена (з PM відповідного проєкту).
+  const person = (r) => (
+    <div style={{ display: "grid", gap: 1 }}>
+      <span><b>{r.name}</b>{r.shared && <span title="Працює на кількох проєктах (спільна команда або розробник з іншого проєкту)" style={{ marginLeft: 6, background: "#EEF2FF", color: "#4338CA", borderRadius: 999, padding: "1px 8px", fontSize: 11, fontWeight: 600 }}>спільний</span>}</span>
+      {(r.team || r.position) && <span style={{ color: C.muted, fontSize: 12 }}>{[r.team, r.position].filter(Boolean).join(" · ")}</span>}
+      {r.others.length > 0 && <span style={{ color: C.ink2, fontSize: 12 }}>Також: {r.others.map((o) => o.project + " " + num(o.pct) + "%" + (o.pm ? " (" + o.pm + ")" : "")).join(", ")}</span>}
+    </div>
+  );
+
+  const decideForm = (r) => (
+    <tr><td colSpan={6} style={{ background: "#F8FAFC" }}>
+      <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
+        <label style={{ fontSize: 12.5, color: C.muted }}>Що сталося
+          <select value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })} style={{ display: "block" }}>
+            {Object.entries(d.actions).map(([a, l]) => <option key={a} value={a}>{l}</option>)}
+          </select>
+        </label>
+        {form.kind === "manual" && (
+          <label style={{ fontSize: 12.5, color: C.muted }}>Години
+            <input type="number" min="0" max="744" value={form.hours} onChange={(e) => setForm({ ...form, hours: e.target.value })} style={{ display: "block", width: 100 }} />
+          </label>
+        )}
+        <label style={{ fontSize: 12.5, color: C.muted, flex: "1 1 260px" }}>Коментар (обов'язково)
+          <input type="text" value={form.comment} onChange={(e) => setForm({ ...form, comment: e.target.value })} style={{ display: "block", width: "100%" }} placeholder={form.kind === "plan" ? "напр.: з 5-го числа працює на іншому проєкті, подам заявку" : form.kind === "tracker" ? "напр.: частину годин списали на інший проєкт" : "напр.: за моїми даними 60 год"} />
+        </label>
+        <button style={addBtn} disabled={busy} onClick={() => saveDecision(r)}>Зберегти</button>
+        {r.res && <button className="link" disabled={busy} onClick={async () => { await post("resolve-clear", { employeeId: r.employeeId, project: r.project }); setOpenRow(null); }}>зняти рішення</button>}
+        <button className="link" onClick={() => setOpenRow(null)}>скасувати</button>
+      </div>
+    </td></tr>
+  );
 
   return (
     <>
-      <section style={{ ...card, padding: 16, display: "grid", gap: 10 }}>
-        <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-          <h2 style={{ margin: 0, fontSize: 17 }}>Звірка годин із планом</h2>
+      <section style={{ ...card, padding: 14, display: "grid", gap: 10 }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <h2 style={{ margin: 0, fontSize: 17 }}>Звірка</h2>
           <select value={cur} onChange={(e) => { setOpenRow(null); setPeriod(e.target.value); }} aria-label="Період" style={{ width: "auto" }}>
             {choices.map((k) => <option key={k} value={k}>{label(k)}{k === d.defaultPeriod ? " (остання завершена)" : k > d.defaultPeriod ? " (триває)" : ""}</option>)}
           </select>
-          <span style={{ marginLeft: "auto", fontSize: 12.5, color: d.hours ? "#15803D" : C.warn, fontWeight: 600 }}>
-            {d.hours ? "Години завантажено: " + d.hours.count + " рядків · " + d.hours.by + ", " + fmtDT(d.hours.at) : "Годин за цей період ще немає"}
+          <span style={{ fontSize: 12.5, color: d.hours ? C.muted : C.warn }}>
+            {d.hours ? "Години: " + d.hours.count + " рядків, " + fmtDT(d.hours.at) : "Годин за період ще немає"}
+          </span>
+          <span style={{ marginLeft: "auto", display: "inline-flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            {d.summary.length > 0 && <span style={{ fontSize: 13, fontWeight: 600, color: allConfirmed ? "#15803D" : C.ink2 }}>{allConfirmed ? "✓ " : ""}Підтверджено {confirmedCount} з {d.summary.length} проєктів</span>}
+            {d.summary.length > 0 && !allConfirmed && (
+              <button style={{ ...addBtn, opacity: canConfirm ? 1 : 0.45 }} disabled={busy || !canConfirm}
+                onClick={() => { if (window.confirm("Підтверджую, що години по моїх проєктах за " + label(cur) + " перевірені й коректні.")) post("confirm", {}, "Звірку підтверджено"); }}>
+                Підтвердити звірку
+              </button>
+            )}
           </span>
         </div>
+        {hint && d.summary.length > 0 && <div style={{ color: C.muted, fontSize: 12.5 }}>{hint}</div>}
+        {d.summary.length > 0 && (
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            {chip("attn", "Потрібна увага", attnCount)}
+            {chip("all", "Усі", d.rows.length)}
+            {chip("shared", "Спільні працівники", sharedCount)}
+            {openCount > 0 && <span style={{ color: C.warn, fontSize: 12.5, fontWeight: 600 }}>без рішення: {openCount}</span>}
+          </div>
+        )}
         <Info>
-          Тут ви звіряєте, скільки людина реально працювала на вашому проєкті (години з трекерів) з тим, що записано в Allocate (план у %).
-          Факт у % — це години ÷ норма періоду (робочі дні × 8). Якщо різниця більша за допуск, оберіть, що сталося: «план застарів» (потрібне переведення), «трекер заповнено неточно» або вкажіть свої години.
-          Коли по всіх відхиленнях є рішення, підтвердіть звірку: бухгалтер побачить, що ваші проєкти перевірені. Якщо після підтвердження цифри зміняться, звірка стане «застарілою» й потребуватиме повторного підтвердження.
+          Звіряємо, скільки людина реально працювала на проєкті (години з трекерів) з тим, що записано в Allocate (план у %). Факт у % — це години ÷ норма періоду (робочі дні × 8).
+          Позначка «спільний» — людина працює на кількох проєктах (спільна команда або розробник з іншого проєкту); під ім'ям видно її команду, посаду і куди ще вона розподілена та хто там PM.
+          Якщо відхилення більше за допуск, оберіть: «план застарів» (потрібне переведення), «трекер заповнено неточно» або свої години. Підтвердження зберігається по проєкту; якщо цифри потім зміняться, воно стане «застарілим».
         </Info>
         {isAdmin && (
-          <div style={{ borderTop: "1px solid " + C.lineSoft, paddingTop: 10 }}>
-            <button className="link" aria-expanded={showAdmin} onClick={() => setShowAdmin((v) => !v)}>Адміністратор: завантажити години й допуск {showAdmin ? "▴" : "▾"}</button>
-            {showAdmin && (
-              <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
-                <label style={{ fontSize: 12.5, color: C.muted }}>Години за {label(cur)} — по рядку на людину й проєкт: «Прізвище Ім'я; Проєкт; години»
-                  <textarea rows={5} value={text} onChange={(e) => setText(e.target.value)} placeholder={"Андрій Тест; Alpha; 64\nАндрій Тест; Beta; 24"} style={{ width: "100%", marginTop: 4, fontFamily: "inherit" }} />
+          <div style={{ borderTop: "1px solid " + C.lineSoft, paddingTop: 8 }}>
+            <button className="link" aria-expanded={showSettings} onClick={() => setShowSettings((v) => !v)}>⚙ Години, відповідність імен, допуск {showSettings ? "▴" : "▾"}</button>
+            {showSettings && (
+              <div style={{ display: "grid", gap: 12, marginTop: 10 }}>
+                <label style={{ fontSize: 12.5, color: C.muted }}>Години за {label(cur)} — «Прізвище Ім'я; Проєкт; години», по рядку на людину й проєкт
+                  <textarea rows={4} value={text} onChange={(e) => setText(e.target.value)} placeholder={"Андрій Тест; Alpha; 64\nAndrii Test; Beta; 24"} style={{ width: "100%", marginTop: 4, fontFamily: "inherit" }} />
                 </label>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                  <button className="ghost" disabled={busy || !text.trim()} onClick={async () => { const ok = await post("hours-set", { text }, "Години завантажено"); if (ok) setText(""); }}>Завантажити</button>
+                  <button className="ghost" disabled={busy || !text.trim()} onClick={async () => { const ok = await post("hours-set", { text }, "Години завантажено"); if (ok) setText(""); }}>Завантажити години</button>
                   {d.hours && <button className="link" style={{ color: C.stop }} disabled={busy} onClick={() => { if (window.confirm("Прибрати завантажені години за цей період? Підтвердження звірки лишаться, але покажуть застарілими.")) post("hours-clear", {}, "Години прибрано"); }}>прибрати завантажене</button>}
                 </div>
-                <div style={{ display: "grid", gap: 6, fontSize: 12.5, color: C.muted }}>
-                  <label>Відповідність імен: у трекерах люди записані англійською, в Allocate — українським ПІБ. По рядку: «English Name; Український ПІБ» (ПІБ як в Allocate). Після завантаження годин система сама підкаже схожі імена.
-                    <textarea rows={3} value={aliasText} onChange={(e) => setAliasText(e.target.value)} placeholder={"Ivan Petrenko; Петренко Іван Іванович"} style={{ width: "100%", marginTop: 4, fontFamily: "inherit" }} />
-                  </label>
-                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                    <button className="ghost" disabled={busy || !aliasText.trim()} onClick={async () => { const r = await post("alias-bulk", { text: aliasText }, "Відповідність збережено"); if (r) setAliasText(""); }}>Зберегти відповідність</button>
-                    {d.aliases && d.aliases.length > 0 && <span>Збережено: {d.aliases.length}</span>}
-                  </div>
-                  {d.aliasBad && d.aliasBad.length > 0 && <span style={{ color: C.warn }}>Не прочитано рядків: {d.aliasBad.length} (ПІБ має збігатися з Allocate).</span>}
-                  {d.aliases && d.aliases.length > 0 && (
-                    <details><summary style={{ cursor: "pointer" }}>Показати збережені</summary>
-                      <div style={{ display: "grid", gap: 2, marginTop: 6 }}>
-                        {d.aliases.map((a) => <div key={a.person}>{a.person} → <b>{a.name}</b> <button className="link" disabled={busy} onClick={() => post("alias-clear", { person: a.person })}>прибрати</button></div>)}
-                      </div>
-                    </details>
-                  )}
+                <label style={{ fontSize: 12.5, color: C.muted }}>Відповідність імен — «English Name; Український ПІБ» (ПІБ як в Allocate). Схожі імена система підкаже сама.
+                  <textarea rows={2} value={aliasText} onChange={(e) => setAliasText(e.target.value)} placeholder={"Ivan Petrenko; Петренко Іван Іванович"} style={{ width: "100%", marginTop: 4, fontFamily: "inherit" }} />
+                </label>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", fontSize: 12.5, color: C.muted }}>
+                  <button className="ghost" disabled={busy || !aliasText.trim()} onClick={async () => { const r = await post("alias-bulk", { text: aliasText }, "Відповідність збережено"); if (r) setAliasText(""); }}>Зберегти відповідність</button>
+                  {d.aliases && d.aliases.length > 0 && <span>Збережено: {d.aliases.length}</span>}
+                  {d.aliasBad && d.aliasBad.length > 0 && <span style={{ color: C.warn }}>Не прочитано рядків: {d.aliasBad.length}</span>}
                 </div>
+                {d.aliases && d.aliases.length > 0 && (
+                  <details style={{ fontSize: 12.5, color: C.muted }}><summary style={{ cursor: "pointer" }}>Збережені відповідності</summary>
+                    <div style={{ display: "grid", gap: 2, marginTop: 6 }}>
+                      {d.aliases.map((a) => <div key={a.person}>{a.person} → <b>{a.name}</b> <button className="link" disabled={busy} onClick={() => post("alias-clear", { person: a.person })}>прибрати</button></div>)}
+                    </div>
+                  </details>
+                )}
                 {cfg && (
                   <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", fontSize: 12.5, color: C.muted }}>
-                    {[["tol", "Допуск, п.п."], ["tolSmall", "Допуск для малих часток, п.п."], ["smallUpTo", "Мала частка — до, %"]].map(([k, l]) => (
+                    {[["tol", "Допуск, п.п."], ["tolSmall", "Для малих часток, п.п."], ["smallUpTo", "Мала частка — до, %"]].map(([k, l]) => (
                       <label key={k}>{l}<input type="number" min="0" max="100" value={cfg[k]} onChange={(e) => setCfg({ ...cfg, [k]: e.target.value })} style={{ display: "block", width: 90 }} /></label>
                     ))}
                     <button className="ghost" disabled={busy} onClick={() => post("cfg-set", { tol: cfg.tol, tolSmall: cfg.tolSmall, smallUpTo: cfg.smallUpTo }, "Допуск збережено")}>Зберегти допуск</button>
@@ -155,9 +218,9 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
       </section>
 
       {d.unmatched && d.unmatched.length > 0 && (
-        <section style={{ ...card, padding: 16, display: "grid", gap: 8, borderColor: "#FED7AA" }}>
-          <b style={{ color: C.warn }}>Години, які не вдалося віднести до жодного PM: {d.unmatched.length}</b>
-          <span style={{ color: C.muted, fontSize: 12.5 }}>Людини немає в Allocate (інше написання імені, зовнішній виконавець) або проєкт із трекера не збігається з проєктом Allocate. Виправте назву в таблиці годин і завантажте її знову.</span>
+        <details style={{ ...card, padding: "10px 14px", borderColor: "#FED7AA" }} open={isAdmin}>
+          <summary style={{ cursor: "pointer", color: C.warn, fontWeight: 600 }}>Години без відповідності в Allocate: {d.unmatched.length}</summary>
+          <div style={{ color: C.muted, fontSize: 12.5, margin: "6px 0" }}>Людини немає в Allocate (інше написання імені, зовнішній виконавець) або проєкт з трекера не збігається з проєктом Allocate.</div>
           <div style={{ overflowX: "auto" }}><table>
             <thead><tr><th>Людина</th><th>Проєкт</th><th className="num">Години</th><th>Що не збіглося</th><th>Зіставити з людиною Allocate</th></tr></thead>
             <tbody>{d.unmatched.slice(0, 50).map((u, i) => <tr key={i}><td>{u.person}</td><td>{u.project}</td><td className="num">{num(u.hours)}</td><td>{u.why === "person" ? "людини немає в Allocate" : u.why === "project" ? "проєкту немає в Allocate" : "ні людини, ні проєкту"}</td>
@@ -170,8 +233,8 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
                   </select>
                 </span>) : <span style={{ color: C.muted, fontSize: 12.5 }}>{u.why === "project" ? "виправте назву проєкту в таблиці" : "лише адміністратор"}</span>}</td></tr>)}</tbody>
           </table></div>
-          {d.unmatched.length > 50 && <span style={{ color: C.muted, fontSize: 12.5 }}>…і ще {d.unmatched.length - 50}</span>}
-        </section>
+          {d.unmatched.length > 50 && <div style={{ color: C.muted, fontSize: 12.5 }}>…і ще {d.unmatched.length - 50}</div>}
+        </details>
       )}
 
       {!Object.keys(byProject).length && (
@@ -179,88 +242,56 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
       )}
 
       {Object.keys(byProject).map((project) => {
-        const s = sumOf(project) || {};
-        const rows = byProject[project];
+        const s = sumOf(project);
+        const all = byProject[project];
+        const rows = all.filter(pass);
         const st = s.state === "confirmed" ? ["✓ підтверджено · " + s.by + ", " + fmtDT(s.at), "#15803D", "#F0FDF4"]
           : s.state === "stale" ? ["підтвердження застаріло — цифри змінились", C.warn, C.warnSoft]
           : s.open ? ["потрібні рішення: " + s.open, C.warn, C.warnSoft] : ["готово до підтвердження", C.signal, C.signalSoft];
+        const collapsed = !rows.length || (filter === "attn" && !expanded[project] && !rows.length);
         return (
           <section key={project} style={{ ...card, padding: 0, overflow: "hidden" }}>
-            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", padding: "12px 16px", borderBottom: "1px solid " + C.lineSoft }}>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", padding: "10px 14px", borderBottom: rows.length ? "1px solid " + C.lineSoft : "none" }}>
               <b style={{ fontSize: 15 }}>{project}</b>
               <span style={{ background: st[2], color: st[1], borderRadius: 999, padding: "2px 10px", fontSize: 12, fontWeight: 600 }}>{st[0]}</span>
-              {s.state === "confirmed" && <button className="link" style={{ marginLeft: "auto", fontSize: 12.5 }} disabled={busy} onClick={() => post("reopen", { project }, "Підтвердження знято")}>зняти підтвердження</button>}
+              <span style={{ color: C.muted, fontSize: 12.5 }}>{all.length} {all.length === 1 ? "людина" : "людей"}{filter !== "all" && rows.length < all.length ? ", показано " + rows.length : ""}</span>
+              <span style={{ marginLeft: "auto", display: "inline-flex", gap: 12 }}>
+                {filter === "attn" && !rows.length && all.length > 0 && <button className="link" style={{ fontSize: 12.5 }} onClick={() => setFilter("all")}>показати всіх</button>}
+                {s.state === "confirmed" && <button className="link" style={{ fontSize: 12.5 }} disabled={busy} onClick={() => post("reopen", { project }, "Підтвердження знято")}>зняти підтвердження</button>}
+              </span>
             </div>
-            <div style={{ overflowX: "auto" }}>
-              <table>
-                <thead><tr><th>Людина</th><th className="num">План, %</th><th className="num">Факт, год</th><th className="num">Факт, %</th><th className="num">Різниця</th><th>Стан / рішення</th><th></th></tr></thead>
-                <tbody>
-                  {rows.map((r) => {
-                    const k = r.employeeId + "|" + r.project;
-                    const open = openRow === k;
-                    const hot = needsDecision(r);
-                    return (
-                      <React.Fragment key={k}>
-                        <tr style={hot ? { background: C.warnSoft } : undefined}>
-                          <td><b>{r.name}</b></td>
-                          <td className="num" title={r.planSrc === "entry" ? "План із табеля команди за цей період" : "План за розподілом і переведеннями"}>{num(r.planPct)}{r.planSrc === "entry" && <span style={{ color: C.muted, fontSize: 11 }}> табель</span>}</td>
-                          <td className="num">{num(r.factHours)}{r.res && r.res.action === "manual" && r.trackerHours != null ? <span style={{ color: C.muted }}> (трекер {num(r.trackerHours)})</span> : null}</td>
-                          <td className="num">{num(r.factPct)}</td>
-                          <td className="num" style={{ color: r.state === "warn" ? C.warn : undefined, fontWeight: r.state === "warn" ? 600 : 400 }}>{r.diff == null ? "—" : (r.diff > 0 ? "+" : "") + num(r.diff)}</td>
-                          <td>{stateCell(r)}</td>
-                          <td style={{ whiteSpace: "nowrap" }}>
-                            {(r.state === "warn" || r.state === "nodata" || r.res) && !open && <button className="ghost" disabled={busy || !d.finished} onClick={() => startDecide(r)}>{r.res ? "Змінити" : "Рішення"}</button>}
-                          </td>
-                        </tr>
-                        {open && (
-                          <tr><td colSpan={7} style={{ background: "#F8FAFC" }}>
-                            <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
-                              <label style={{ fontSize: 12.5, color: C.muted }}>Що сталося
-                                <select value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })} style={{ display: "block" }}>
-                                  {Object.entries(d.actions).map(([a, l]) => <option key={a} value={a}>{l}</option>)}
-                                </select>
-                              </label>
-                              {form.kind === "manual" && (
-                                <label style={{ fontSize: 12.5, color: C.muted }}>Години
-                                  <input type="number" min="0" max="744" value={form.hours} onChange={(e) => setForm({ ...form, hours: e.target.value })} style={{ display: "block", width: 100 }} />
-                                </label>
-                              )}
-                              <label style={{ fontSize: 12.5, color: C.muted, flex: "1 1 260px" }}>Коментар (обов'язково)
-                                <input type="text" value={form.comment} onChange={(e) => setForm({ ...form, comment: e.target.value })} style={{ display: "block", width: "100%" }} placeholder={form.kind === "plan" ? "напр.: з 5-го числа працює на іншому проєкті, подам заявку" : form.kind === "tracker" ? "напр.: частину годин списали на інший проєкт" : "напр.: за моїми даними 60 год"} />
-                              </label>
-                              <button style={addBtn} disabled={busy} onClick={() => saveDecision(r)}>Зберегти</button>
-                              {r.res && <button className="link" disabled={busy} onClick={async () => { await post("resolve-clear", { employeeId: r.employeeId, project: r.project }); setOpenRow(null); }}>зняти рішення</button>}
-                              <button className="link" onClick={() => setOpenRow(null)}>скасувати</button>
-                            </div>
-                          </td></tr>
-                        )}
-                      </React.Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            {!collapsed && (
+              <div style={{ overflowX: "auto" }}>
+                <table>
+                  <thead><tr><th>Людина</th><th className="num">План, %</th><th className="num">Факт</th><th className="num">Різниця</th><th>Стан / рішення</th><th></th></tr></thead>
+                  <tbody>
+                    {rows.map((r) => {
+                      const k = r.employeeId + "|" + r.project;
+                      const open = openRow === k;
+                      const hot = needsDecision(r);
+                      return (
+                        <React.Fragment key={k}>
+                          <tr style={hot ? { background: C.warnSoft } : undefined}>
+                            <td>{person(r)}</td>
+                            <td className="num" title={r.planSrc === "entry" ? "План із табеля команди за цей період" : "План за розподілом і переведеннями"}>{num(r.planPct)}{r.planSrc === "entry" && <span style={{ color: C.muted, fontSize: 11 }}> табель</span>}</td>
+                            <td className="num">{r.factHours == null ? "—" : num(r.factHours) + " год · " + num(r.factPct) + "%"}{r.res && r.res.action === "manual" && r.trackerHours != null ? <div style={{ color: C.muted, fontSize: 11.5 }}>трекер {num(r.trackerHours)} год</div> : null}</td>
+                            <td className="num" style={{ color: r.state === "warn" ? C.warn : undefined, fontWeight: r.state === "warn" ? 600 : 400 }}>{r.diff == null ? "—" : (r.diff > 0 ? "+" : "") + num(r.diff)}</td>
+                            <td>{stateCell(r)}</td>
+                            <td style={{ whiteSpace: "nowrap" }}>
+                              {(r.state === "warn" || r.state === "nodata" || r.res) && !open && <button className="ghost" disabled={busy || !d.finished} onClick={() => startDecide(r)}>{r.res ? "Змінити" : "Рішення"}</button>}
+                            </td>
+                          </tr>
+                          {open && decideForm(r)}
+                        </React.Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </section>
         );
       })}
-
-      {d.summary.length > 0 && (
-        <section style={{ ...card, padding: "14px 16px", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-          {allConfirmed ? <b style={{ color: "#15803D" }}>✓ Звірку за цей період підтверджено по всіх ваших проєктах</b> : (
-            <>
-              <button style={{ ...addBtn, opacity: canConfirm ? 1 : 0.45 }} disabled={busy || !canConfirm}
-                onClick={() => { if (window.confirm("Підтверджую, що години по моїх проєктах за " + label(cur) + " перевірені й коректні.")) post("confirm", {}, "Звірку підтверджено"); }}>
-                Підтверджую звірку
-              </button>
-              <span style={{ color: C.muted, fontSize: 12.5 }}>
-                {!d.finished ? "Період ще триває — підтвердити можна після його завершення."
-                  : !d.hours ? "Спершу потрібні години за період (їх завантажує адміністратор)."
-                  : anyOpen ? "Є відхилення без рішення — оберіть дію по кожному." : "Усе перевірено — можна підтверджувати."}
-              </span>
-            </>
-          )}
-        </section>
-      )}
     </>
   );
 }

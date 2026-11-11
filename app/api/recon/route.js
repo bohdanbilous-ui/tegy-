@@ -73,7 +73,7 @@ function build(d, me, period) {
   const tomb = d.state.deleted || {};
   const employees = (d.state.employees || []).filter((e) => !tomb["e:" + e.id]);
   const transfers = (d.state.transfers || []).filter((t) => !tomb["t:" + t.id]);
-  const rows = reconRows({ key: period, employees, transfers, projects, hours: d.hours, res: d.conf.res, cfg: d.cfg, entries: d.state.entries, aliases: d.aliases });
+  const rows = reconRows({ key: period, employees, transfers, projects, hours: d.hours, res: d.conf.res, cfg: d.cfg, entries: d.state.entries, aliases: d.aliases, teams: d.state.teams, pms: d.state.pms });
   const finished = periodRange(period).to < today;
   const byProject = {};
   rows.forEach((r) => { (byProject[r.project] = byProject[r.project] || []).push(r); });
