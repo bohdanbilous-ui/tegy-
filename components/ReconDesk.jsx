@@ -43,7 +43,6 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
   const [aliasText, setAliasText] = useState("");
   const [showSettings, setShowSettings] = useState(false);
   const [cfg, setCfg] = useState(null);
-  const [nt, setNt] = useState(null);
   const [filter, setFilter] = useState("attn");
   const [expanded, setExpanded] = useState({});
 
@@ -205,32 +204,6 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
                     </div>
                   </details>
                 )}
-                {d.teamsList && (() => {
-                  const cur = nt || d.noTrack || { teams: [], employees: [] };
-                  const toggle = (k, id) => setNt({ ...cur, [k]: cur[k].includes(id) ? cur[k].filter((x) => x !== id) : [...cur[k], id] });
-                  const nameOf = (id) => ((d.people || []).find((p) => p.id === id) || {}).name || id;
-                  return (
-                    <div style={{ display: "grid", gap: 8, fontSize: 12.5, color: C.muted }}>
-                      <div><b>Не ведуть облік годин</b> (адмін-блок, People Partners, рекрутинг тощо): для них звірка не вимагає годин із трекера, розподіл ви збираєте вручну.</div>
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                        {d.teamsList.map((t) => (
-                          <label key={t.id} style={{ border: "1px solid " + C.line, borderRadius: 999, padding: "3px 10px", cursor: "pointer" }}>
-                            <input type="checkbox" checked={cur.teams.includes(t.id)} onChange={() => toggle("teams", t.id)} style={{ marginRight: 6 }} />{t.name}
-                          </label>
-                        ))}
-                        {!d.teamsList.length && <span>Команд ще немає.</span>}
-                      </div>
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                        <select value="" onChange={(e) => { if (e.target.value && !cur.employees.includes(e.target.value)) setNt({ ...cur, employees: [...cur.employees, e.target.value] }); }} style={{ width: "auto", maxWidth: 240 }} aria-label="Додати людину, яка не веде облік">
-                          <option value="">+ окрема людина…</option>
-                          {(d.people || []).filter((p) => !cur.employees.includes(p.id)).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                        </select>
-                        {cur.employees.map((id) => <span key={id} style={{ border: "1px solid " + C.line, borderRadius: 999, padding: "3px 10px" }}>{nameOf(id)} <button className="link" onClick={() => toggle("employees", id)} aria-label={"Прибрати " + nameOf(id)}>×</button></span>)}
-                      </div>
-                      <div><button className="ghost" disabled={busy || !nt} onClick={async () => { const r = await post("notrack-set", { teams: cur.teams, employees: cur.employees }, "Збережено"); if (r) setNt(null); }}>Зберегти</button></div>
-                    </div>
-                  );
-                })()}
                 {cfg && (
                   <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", fontSize: 12.5, color: C.muted }}>
                     {[["tol", "Допуск, п.п."], ["tolSmall", "Для малих часток, п.п."], ["smallUpTo", "Мала частка — до, %"]].map(([k, l]) => (
@@ -321,5 +294,60 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
         );
       })}
     </>
+  );
+}
+
+// Довідник → «Облік годин»: хто не веде облік годин у трекері (адмін-блок, People Partners, рекрутинг, окремі люди).
+export function NoTrackBook({ token, C, card, setToast, onApiError }) {
+  const [d, setD] = useState(null);
+  const [cur, setCur] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(async (body) => {
+    setBusy(true);
+    try {
+      const data = await reconCall(token, body ? "POST" : "GET", body || null, undefined);
+      setD(data); setCur({ teams: data.noTrack.teams, employees: data.noTrack.employees });
+      return data;
+    } catch (e) { if (e.status === 401) onApiError && onApiError(e); else setToast(e.message); return null; }
+    finally { setBusy(false); }
+  }, [token]);
+  useEffect(() => { load(); }, []);
+  if (!d || !cur) return <section style={{ ...card, padding: 22, color: C.muted }}>Завантажуємо…</section>;
+  const dirty = JSON.stringify([...cur.teams].sort()) !== JSON.stringify([...d.noTrack.teams].sort()) || JSON.stringify([...cur.employees].sort()) !== JSON.stringify([...d.noTrack.employees].sort());
+  const toggle = (k, id) => setCur({ ...cur, [k]: cur[k].includes(id) ? cur[k].filter((x) => x !== id) : [...cur[k], id] });
+  const nameOf = (id) => ((d.people || []).find((p) => p.id === id) || {}).name || id;
+  const chip = { border: "1px solid " + C.line, borderRadius: 999, padding: "3px 10px", fontSize: 13 };
+  return (
+    <section style={{ ...card, padding: 22, maxWidth: 720, display: "grid", gap: 14 }}>
+      <div>
+        <h2 style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>Облік годин</h2>
+        <p style={{ margin: "6px 0 0", color: C.ink2, fontSize: 13.5 }}>Команди й люди, які не ведуть години в трекері (адмін-блок, People Partners, рекрутинг). У звірці PM для них немає позначки «немає годин у трекері» — розподіл збираєте ви вручну.</p>
+      </div>
+      <div>
+        <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 6 }}>Команди</div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {d.teamsList.map((t) => (
+            <label key={t.id} style={{ ...chip, cursor: "pointer", background: cur.teams.includes(t.id) ? C.signalSoft : C.surface }}>
+              <input type="checkbox" checked={cur.teams.includes(t.id)} onChange={() => toggle("teams", t.id)} style={{ marginRight: 6 }} />{t.name}
+            </label>
+          ))}
+          {!d.teamsList.length && <span style={{ color: C.muted }}>Команд ще немає.</span>}
+        </div>
+      </div>
+      <div>
+        <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 6 }}>Окремі люди</div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          {cur.employees.map((id) => <span key={id} style={chip}>{nameOf(id)} <button onClick={() => toggle("employees", id)} aria-label={"Прибрати " + nameOf(id)} style={{ cursor: "pointer", background: "none", border: "none", color: C.signal }}>×</button></span>)}
+          <select value="" onChange={(e) => { if (e.target.value && !cur.employees.includes(e.target.value)) setCur({ ...cur, employees: [...cur.employees, e.target.value] }); }} style={{ width: "auto", maxWidth: 240, border: "1px solid " + C.line, borderRadius: 8, padding: "6px 8px", background: "#fff" }} aria-label="Додати людину, яка не веде облік">
+            <option value="">+ додати людину…</option>
+            {(d.people || []).filter((p) => !cur.employees.includes(p.id)).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </div>
+      </div>
+      <div>
+        <button disabled={busy || !dirty} onClick={async () => { const r = await load({ action: "notrack-set", teams: cur.teams, employees: cur.employees }); if (r) setToast("Збережено"); }}
+          style={{ cursor: dirty ? "pointer" : "default", opacity: dirty ? 1 : 0.5, background: C.signal, color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontWeight: 600 }}>Зберегти</button>
+      </div>
+    </section>
   );
 }
