@@ -5,7 +5,7 @@ import { sameName } from "../../../lib/users";
 import { isPm } from "../../../lib/pms";
 import { orderProjects } from "../../../lib/projects";
 import { PERIOD_RE, periodRange, keyOfDate, prevKey, addDays } from "../../../lib/loans";
-import { HOURS_KEY, CONF_KEY, CFG_KEY, ACTIONS, cleanCfg, reconRows, needsDecision, fingerprint, parseHoursText, rowKey, unmatchedHours, ALIAS_KEY, parseAliasText, NOTRACK_KEY, cleanNoTrack } from "../../../lib/recon";
+import { HOURS_KEY, CONF_KEY, CFG_KEY, ACTIONS, cleanCfg, reconRows, needsDecision, fingerprint, parseHoursText, rowKey, unmatchedHours, ALIAS_KEY, parseAliasText, NOTRACK_KEY, cleanNoTrack, matchTrackerUsers } from "../../../lib/recon";
 
 export const dynamic = "force-dynamic";
 
@@ -110,7 +110,7 @@ export async function POST(request) {
   const me = g.me;
   let b; try { b = await request.json(); } catch (e) { return bad("Некоректний запит."); }
   const period = String(b.period || "");
-  const periodless = ["cfg-set", "alias-set", "alias-bulk", "alias-clear", "notrack-set"].includes(b.action);
+  const periodless = ["cfg-set", "alias-set", "alias-bulk", "alias-clear", "notrack-set", "users-import"].includes(b.action);
   if (!periodless && !PERIOD_RE.test(period)) return bad("Невірний період.");
   const d = await load(period);
   const reply = () => NextResponse.json(build(d, me, period));
@@ -129,6 +129,29 @@ export async function POST(request) {
     const per = PERIOD_RE.test(period) ? period : lastFinished(kyivToday());
     d.hours = d.hoursAll[per] || null; d.conf = d.confAll[per] || { res: {}, ok: {} };
     return NextResponse.json(build(d, me, per));
+  }
+
+  if (b.action === "users-import") {
+    if (!isAdmin) return bad("Це може лише адміністратор.", 403);
+    const users = (Array.isArray(b.rows) ? b.rows : []).slice(0, 2000).map((u) => ({ name: u && u.name, email: u && u.email, status: u && u.status }));
+    if (!users.length) return bad("У файлі не знайдено користувачів (потрібні колонки з ім'ям та email).");
+    const tomb = d.state.deleted || {};
+    const employees = (d.state.employees || []).filter((e) => !tomb["e:" + e.id]);
+    const m = matchTrackerUsers(users, employees);
+    const next = { ...d.aliases };
+    let saved = 0, same = 0;
+    m.matched.forEach((x) => {
+      const k = x.person.toLowerCase().replace(/\s+/g, " ");
+      if (k === x.name.toLowerCase().replace(/\s+/g, " ")) { same++; return; }
+      if (next[k] !== x.employeeId) { next[k] = x.employeeId; saved++; }
+    });
+    if (saved) await writeKey(ALIAS_KEY, next);
+    d.aliases = next;
+    const per = PERIOD_RE.test(period) ? period : lastFinished(kyivToday());
+    d.hours = d.hoursAll[per] || null; d.conf = d.confAll[per] || { res: {}, ok: {} };
+    const out = build(d, me, per);
+    out.import = { total: m.matched.length + m.suggested.length + m.none.length, byEmail: m.matched.filter((x) => x.by === "email").length, byName: m.matched.filter((x) => x.by === "name").length, saved, same, suggested: m.suggested.slice(0, 300), none: m.none.slice(0, 300) };
+    return NextResponse.json(out);
   }
 
   if (b.action === "alias-set" || b.action === "alias-bulk" || b.action === "alias-clear") {

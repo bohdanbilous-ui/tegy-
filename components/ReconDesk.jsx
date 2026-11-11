@@ -4,6 +4,7 @@
    Адміністратор додатково завантажує години (тестове джерело) і задає допуск. */
 import React, { useState, useEffect, useCallback } from "react";
 import Info from "./Info";
+import * as XLSX from "xlsx";
 
 const MONTHS = ["Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень", "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень"];
 const pad = (n) => String(n).padStart(2, "0");
@@ -42,6 +43,8 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
   const [text, setText] = useState("");
   const [aliasText, setAliasText] = useState("");
   const [showSettings, setShowSettings] = useState(false);
+  const [imp, setImp] = useState(null);
+  const fileRef = React.useRef(null);
   const [cfg, setCfg] = useState(null);
   const [filter, setFilter] = useState("attn");
   const [expanded, setExpanded] = useState({});
@@ -63,6 +66,21 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
   useEffect(() => { run("GET", null, period || undefined); }, [period]);
 
   const post = (action, extra, okText) => run("POST", { action, period, ...extra }).then((r) => { if (r && okText) setToast(okText); return r; });
+
+  // Вивантаження користувачів ClickUp (xlsx/csv): колонки «Task Name», «Status», «…Email…». Рядки-заголовки бізнес-юнітів пропускаємо.
+  async function importUsers(file) {
+    try {
+      const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: "" });
+      const hi = rows.findIndex((r) => r.some((c) => /email|e-mail|пошта/i.test(String(c))) && r.some((c) => /name|ім/i.test(String(c))));
+      if (hi < 0) return setToast("Не знайшов колонки з ім'ям та email.");
+      const h = rows[hi].map((c) => String(c));
+      const iN = h.findIndex((c) => /task name|^name|ім/i.test(c)), iE = h.findIndex((c) => /email|e-mail|пошта/i.test(c)), iS = h.findIndex((c) => /status|статус/i.test(c));
+      const users = rows.slice(hi + 1).map((r) => ({ name: String(r[iN] || "").trim(), email: String(r[iE] || "").trim(), status: iS >= 0 ? String(r[iS] || "").trim() : "" })).filter((u) => u.name && /@/.test(u.email));
+      const r = await post("users-import", { rows: users });
+      if (r && r.import) setImp(r.import);
+    } catch (e) { setToast("Не вдалося прочитати файл: " + e.message); }
+  }
 
   if (!d) return <section style={{ ...card, padding: 24, color: C.muted }}>Завантажуємо…</section>;
   const isAdmin = d.me && d.me.role === "admin";
@@ -197,6 +215,27 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
                   {d.aliases && d.aliases.length > 0 && <span>Збережено: {d.aliases.length}</span>}
                   {d.aliasBad && d.aliasBad.length > 0 && <span style={{ color: C.warn }}>Не прочитано рядків: {d.aliasBad.length}</span>}
                 </div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", fontSize: 12.5, color: C.muted }}>
+                  <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} aria-label="Вивантаження користувачів ClickUp" onChange={(e) => { const f = e.target.files && e.target.files[0]; e.target.value = ""; if (f) importUsers(f); }} />
+                  <button className="ghost" disabled={busy} onClick={() => fileRef.current && fileRef.current.click()}>Імпорт користувачів ClickUp (xlsx)</button>
+                  <span>Збіг за email із довідником співробітників, інакше за ПІБ; схожі імена підкаже, але не збереже без вас.</span>
+                </div>
+                {imp && (
+                  <div style={{ display: "grid", gap: 6, fontSize: 12.5, color: C.ink2, border: "1px solid " + C.line, borderRadius: 8, padding: 10 }}>
+                    <div><b>{imp.total}</b> у файлі: за email — <b>{imp.byEmail}</b>, за ПІБ — <b>{imp.byName}</b>; нових відповідностей збережено <b>{imp.saved}</b>; підказок — <b>{imp.suggested.length}</b>; не знайдено — <b>{imp.none.length}</b>. <button className="link" onClick={() => setImp(null)}>закрити</button></div>
+                    {imp.suggested.map((u) => (
+                      <div key={u.person} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                        <span>{u.person}{u.email ? " · " + u.email : ""}</span>
+                        <button className="ghost" disabled={busy} onClick={async () => { const r = await post("alias-set", { person: u.person, employeeId: u.suggest.employeeId }, "Відповідність збережено"); if (r) setImp((x) => x && { ...x, suggested: x.suggested.filter((s) => s.person !== u.person) }); }}>Це {u.suggest.name}</button>
+                      </div>
+                    ))}
+                    {imp.none.length > 0 && (
+                      <details><summary style={{ cursor: "pointer" }}>Немає в Allocate ({imp.none.length})</summary>
+                        <div style={{ display: "grid", gap: 2, marginTop: 4, color: C.muted }}>{imp.none.map((u) => <div key={u.person}>{u.person}{u.email ? " · " + u.email : ""}{u.status && u.status !== "ACTIVE" ? " · " + u.status : ""}</div>)}</div>
+                      </details>
+                    )}
+                  </div>
+                )}
                 {d.aliases && d.aliases.length > 0 && (
                   <details style={{ fontSize: 12.5, color: C.muted }}><summary style={{ cursor: "pointer" }}>Збережені відповідності</summary>
                     <div style={{ display: "grid", gap: 2, marginTop: 6 }}>
