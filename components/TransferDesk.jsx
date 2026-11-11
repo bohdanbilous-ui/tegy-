@@ -15,7 +15,7 @@ import Reminders from "./Reminders";
 import PayDesk from "./PayDesk";
 import PfChanges from "./PfChanges";
 import PmDesk, { LoansAdmin, ReconAdmin } from "./PmDesk";
-import { NoTrackBook } from "./ReconDesk";
+import TrackerBook from "./TrackerBook";
 
 /* Вхід через Google: NEXT_PUBLIC_GOOGLE_CLIENT_ID і NEXT_PUBLIC_ALLOWED_DOMAIN.
    Токен перевіряється на сервері (app/api/state/route.js). */
@@ -3711,7 +3711,7 @@ export default function TransferDesk() {
               <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
                 {[["emp", "Співробітники", employees.length], ["proj", "Проєкти", allProjects.length],
                   ["legal", "Юрособи", ((settings.pay || {}).legals || []).length], ["fpv", "FPV", (fpv || []).filter((f) => f.active !== false).length],
-                  ["pp", "People Partners", partners.length], ["notrack", "Облік годин", ""], ["reason", "Підстави", allReasons.length],
+                  ["pp", "People Partners", partners.length], ["notrack", "Трекери", ""], ["reason", "Підстави", allReasons.length],
                   ["users", "Користувачі", ""], ["cfg", "Налаштування", ""]].filter(([k]) => !isAcc || k === "emp" || k === "legal" || k === "fpv").map(([k, l, n]) => (
                   <button key={k} onClick={() => setBook(k)} aria-current={book === k}
                     style={{ cursor: "pointer", border: "none", background: book === k ? C.ink : "transparent",
@@ -4105,7 +4105,7 @@ export default function TransferDesk() {
               </section>
             )}
 
-            {isAdmin && book === "notrack" && <NoTrackBook token={tokenRef.current} C={C} card={card} setToast={setToast} onApiError={onApiError} />}
+            {isAdmin && book === "notrack" && <TrackerBook token={tokenRef.current} C={C} card={card} setToast={setToast} onApiError={onApiError} />}
 
             {isAdmin && book === "pp" && (
               <section style={{ ...card, overflow: "hidden" }}>

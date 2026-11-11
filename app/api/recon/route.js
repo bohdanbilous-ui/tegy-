@@ -4,8 +4,9 @@ import { whoIs } from "../../../lib/auth";
 import { sameName } from "../../../lib/users";
 import { isPm } from "../../../lib/pms";
 import { orderProjects } from "../../../lib/projects";
+import { IDENT_KEY, identityAliases } from "../../../lib/identity";
 import { PERIOD_RE, periodRange, keyOfDate, prevKey, addDays } from "../../../lib/loans";
-import { HOURS_KEY, CONF_KEY, CFG_KEY, ACTIONS, cleanCfg, reconRows, needsDecision, fingerprint, parseHoursText, rowKey, unmatchedHours, ALIAS_KEY, parseAliasText, NOTRACK_KEY, cleanNoTrack, matchTrackerUsers } from "../../../lib/recon";
+import { HOURS_KEY, CONF_KEY, CFG_KEY, ACTIONS, cleanCfg, reconRows, needsDecision, fingerprint, parseHoursText, rowKey, unmatchedHours, ALIAS_KEY, parseAliasText, NOTRACK_KEY, cleanNoTrack } from "../../../lib/recon";
 
 export const dynamic = "force-dynamic";
 
@@ -57,13 +58,13 @@ function lastFinished(today) {
 }
 
 async function load(period) {
-  const [state, hoursAll, confAll, cfg, deputies, aliases, noTrack] = await Promise.all([
-    readState(), readKey(HOURS_KEY), readKey(CONF_KEY), readKey(CFG_KEY), readKey(DEPUTIES_KEY), readKey(ALIAS_KEY), readKey(NOTRACK_KEY),
+  const [state, hoursAll, confAll, cfg, deputies, aliases, noTrack, ident] = await Promise.all([
+    readState(), readKey(HOURS_KEY), readKey(CONF_KEY), readKey(CFG_KEY), readKey(DEPUTIES_KEY), readKey(ALIAS_KEY), readKey(NOTRACK_KEY), readKey(IDENT_KEY),
   ]);
   return {
     state: state || {}, hours: (hoursAll || {})[period] || null, hoursAll: hoursAll || {},
     conf: (confAll || {})[period] || { res: {}, ok: {} }, confAll: confAll || {},
-    cfg: cleanCfg(cfg), deputies: deputies || [], aliases: aliases || {}, noTrack: cleanNoTrack(noTrack),
+    cfg: cleanCfg(cfg), deputies: deputies || [], aliases: aliases || {}, identAliases: identityAliases(ident), noTrack: cleanNoTrack(noTrack),
   };
 }
 
@@ -73,7 +74,7 @@ function build(d, me, period) {
   const tomb = d.state.deleted || {};
   const employees = (d.state.employees || []).filter((e) => !tomb["e:" + e.id]);
   const transfers = (d.state.transfers || []).filter((t) => !tomb["t:" + t.id]);
-  const rows = reconRows({ key: period, employees, transfers, projects, hours: d.hours, res: d.conf.res, cfg: d.cfg, entries: d.state.entries, aliases: d.aliases, teams: d.state.teams, pms: d.state.pms, noTrack: d.noTrack });
+  const rows = reconRows({ key: period, employees, transfers, projects, hours: d.hours, res: d.conf.res, cfg: d.cfg, entries: d.state.entries, aliases: { ...d.identAliases, ...d.aliases }, teams: d.state.teams, pms: d.state.pms, noTrack: d.noTrack });
   const finished = periodRange(period).to < today;
   const byProject = {};
   rows.forEach((r) => { (byProject[r.project] = byProject[r.project] || []).push(r); });
@@ -88,7 +89,7 @@ function build(d, me, period) {
       by: ok ? ok.by : "", at: ok ? ok.at : "", fp,
     };
   });
-  const unmatched = me.role === "pm" ? undefined : unmatchedHours({ hours: d.hours, employees, projects: liveProjects(d.state), aliases: d.aliases });
+  const unmatched = me.role === "pm" ? undefined : unmatchedHours({ hours: d.hours, employees, projects: liveProjects(d.state), aliases: { ...d.identAliases, ...d.aliases } });
   const aliasList = me.role === "admin" ? Object.keys(d.aliases).map((k) => { const e = employees.find((x) => x.id === d.aliases[k]); return e ? { person: k, employeeId: e.id, name: e.name } : null; }).filter(Boolean) : undefined;
   const base = { period, today, finished, cfg: d.cfg, unmatched, aliases: aliasList, noTrack: me.role === "admin" ? d.noTrack : undefined, teamsList: me.role === "admin" ? (d.state.teams || []).filter((t) => !tomb["tm:" + t.id]).map((t) => ({ id: t.id, name: t.name })) : undefined, people: me.role === "admin" ? employees.map((e) => ({ id: e.id, name: e.name })) : undefined, hours: d.hours ? { at: d.hours.at, by: d.hours.by, count: d.hours.rows.length } : null, summary };
   if (me.role === "accountant") return base;
@@ -110,7 +111,7 @@ export async function POST(request) {
   const me = g.me;
   let b; try { b = await request.json(); } catch (e) { return bad("Некоректний запит."); }
   const period = String(b.period || "");
-  const periodless = ["cfg-set", "alias-set", "alias-bulk", "alias-clear", "notrack-set", "users-import"].includes(b.action);
+  const periodless = ["cfg-set", "alias-set", "alias-bulk", "alias-clear", "notrack-set"].includes(b.action);
   if (!periodless && !PERIOD_RE.test(period)) return bad("Невірний період.");
   const d = await load(period);
   const reply = () => NextResponse.json(build(d, me, period));
@@ -129,29 +130,6 @@ export async function POST(request) {
     const per = PERIOD_RE.test(period) ? period : lastFinished(kyivToday());
     d.hours = d.hoursAll[per] || null; d.conf = d.confAll[per] || { res: {}, ok: {} };
     return NextResponse.json(build(d, me, per));
-  }
-
-  if (b.action === "users-import") {
-    if (!isAdmin) return bad("Це може лише адміністратор.", 403);
-    const users = (Array.isArray(b.rows) ? b.rows : []).slice(0, 2000).map((u) => ({ name: u && u.name, email: u && u.email, status: u && u.status }));
-    if (!users.length) return bad("У файлі не знайдено користувачів (потрібні колонки з ім'ям та email).");
-    const tomb = d.state.deleted || {};
-    const employees = (d.state.employees || []).filter((e) => !tomb["e:" + e.id]);
-    const m = matchTrackerUsers(users, employees);
-    const next = { ...d.aliases };
-    let saved = 0, same = 0;
-    m.matched.forEach((x) => {
-      const k = x.person.toLowerCase().replace(/\s+/g, " ");
-      if (k === x.name.toLowerCase().replace(/\s+/g, " ")) { same++; return; }
-      if (next[k] !== x.employeeId) { next[k] = x.employeeId; saved++; }
-    });
-    if (saved) await writeKey(ALIAS_KEY, next);
-    d.aliases = next;
-    const per = PERIOD_RE.test(period) ? period : lastFinished(kyivToday());
-    d.hours = d.hoursAll[per] || null; d.conf = d.confAll[per] || { res: {}, ok: {} };
-    const out = build(d, me, per);
-    out.import = { total: m.matched.length + m.suggested.length + m.none.length, byEmail: m.matched.filter((x) => x.by === "email").length, byName: m.matched.filter((x) => x.by === "name").length, saved, same, suggested: m.suggested.slice(0, 300), none: m.none.slice(0, 300) };
-    return NextResponse.json(out);
   }
 
   if (b.action === "alias-set" || b.action === "alias-bulk" || b.action === "alias-clear") {
