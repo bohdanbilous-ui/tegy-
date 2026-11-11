@@ -136,6 +136,18 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
         )}
       </section>
 
+      {d.unmatched && d.unmatched.length > 0 && (
+        <section style={{ ...card, padding: 16, display: "grid", gap: 8, borderColor: "#FED7AA" }}>
+          <b style={{ color: C.warn }}>Години, які не вдалося віднести до жодного PM: {d.unmatched.length}</b>
+          <span style={{ color: C.muted, fontSize: 12.5 }}>Людини немає в Allocate (інше написання імені, зовнішній виконавець) або проєкт із трекера не збігається з проєктом Allocate. Виправте назву в таблиці годин і завантажте її знову.</span>
+          <div style={{ overflowX: "auto" }}><table>
+            <thead><tr><th>Людина</th><th>Проєкт</th><th className="num">Години</th><th>Що не збіглося</th></tr></thead>
+            <tbody>{d.unmatched.slice(0, 50).map((u, i) => <tr key={i}><td>{u.person}</td><td>{u.project}</td><td className="num">{num(u.hours)}</td><td>{u.why === "person" ? "людини немає в Allocate" : u.why === "project" ? "проєкту немає в Allocate" : "ні людини, ні проєкту"}</td></tr>)}</tbody>
+          </table></div>
+          {d.unmatched.length > 50 && <span style={{ color: C.muted, fontSize: 12.5 }}>…і ще {d.unmatched.length - 50}</span>}
+        </section>
+      )}
+
       {!Object.keys(byProject).length && (
         <section style={{ ...card, padding: 20, color: C.muted }}>На ваших проєктах немає людей за цей період.</section>
       )}
@@ -165,7 +177,7 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
                       <React.Fragment key={k}>
                         <tr style={hot ? { background: C.warnSoft } : undefined}>
                           <td><b>{r.name}</b></td>
-                          <td className="num">{num(r.planPct)}</td>
+                          <td className="num" title={r.planSrc === "entry" ? "План із табеля команди за цей період" : "План за розподілом і переведеннями"}>{num(r.planPct)}{r.planSrc === "entry" && <span style={{ color: C.muted, fontSize: 11 }}> табель</span>}</td>
                           <td className="num">{num(r.factHours)}{r.res && r.res.action === "manual" && r.trackerHours != null ? <span style={{ color: C.muted }}> (трекер {num(r.trackerHours)})</span> : null}</td>
                           <td className="num">{num(r.factPct)}</td>
                           <td className="num" style={{ color: r.state === "warn" ? C.warn : undefined, fontWeight: r.state === "warn" ? 600 : 400 }}>{r.diff == null ? "—" : (r.diff > 0 ? "+" : "") + num(r.diff)}</td>

@@ -5,7 +5,7 @@ import { sameName } from "../../../lib/users";
 import { isPm } from "../../../lib/pms";
 import { orderProjects } from "../../../lib/projects";
 import { PERIOD_RE, periodRange, keyOfDate, prevKey, addDays } from "../../../lib/loans";
-import { HOURS_KEY, CONF_KEY, CFG_KEY, ACTIONS, cleanCfg, reconRows, needsDecision, fingerprint, parseHoursText, rowKey } from "../../../lib/recon";
+import { HOURS_KEY, CONF_KEY, CFG_KEY, ACTIONS, cleanCfg, reconRows, needsDecision, fingerprint, parseHoursText, rowKey, unmatchedHours } from "../../../lib/recon";
 
 export const dynamic = "force-dynamic";
 
@@ -71,7 +71,7 @@ function build(d, me, period) {
   const tomb = d.state.deleted || {};
   const employees = (d.state.employees || []).filter((e) => !tomb["e:" + e.id]);
   const transfers = (d.state.transfers || []).filter((t) => !tomb["t:" + t.id]);
-  const rows = reconRows({ key: period, employees, transfers, projects, hours: d.hours, res: d.conf.res, cfg: d.cfg });
+  const rows = reconRows({ key: period, employees, transfers, projects, hours: d.hours, res: d.conf.res, cfg: d.cfg, entries: d.state.entries });
   const finished = periodRange(period).to < today;
   const byProject = {};
   rows.forEach((r) => { (byProject[r.project] = byProject[r.project] || []).push(r); });
@@ -86,7 +86,8 @@ function build(d, me, period) {
       by: ok ? ok.by : "", at: ok ? ok.at : "", fp,
     };
   });
-  const base = { period, today, finished, cfg: d.cfg, hours: d.hours ? { at: d.hours.at, by: d.hours.by, count: d.hours.rows.length } : null, summary };
+  const unmatched = me.role === "pm" ? undefined : unmatchedHours({ hours: d.hours, employees, projects: liveProjects(d.state) });
+  const base = { period, today, finished, cfg: d.cfg, unmatched, hours: d.hours ? { at: d.hours.at, by: d.hours.by, count: d.hours.rows.length } : null, summary };
   if (me.role === "accountant") return base;
   return { ...base, rows, me: { name: me.name, role: me.role }, actions: ACTIONS, defaultPeriod: lastFinished(today) };
 }

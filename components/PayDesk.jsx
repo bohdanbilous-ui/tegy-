@@ -228,6 +228,7 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
   }, [token, perKey, mode]);
   const reconLoaded = !!(recon && recon.hours);
   const reconOpen = reconLoaded ? recon.summary.filter((x) => x.state !== "confirmed") : [];
+  const reconUnmatched = reconLoaded && recon.unmatched ? recon.unmatched.length : 0;
   const approval = (pay.approvals || {})[perKey];
   const stale = !!approval && approval.fp !== fingerprint;
   const fmtAt = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : pad(d.getDate()) + "." + pad(d.getMonth() + 1) + " " + pad(d.getHours()) + ":" + pad(d.getMinutes()); };
@@ -259,8 +260,8 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
   const approve = () => {
     if (badCount || !included.length) return;
     let reason = "";
-    if (reconOpen.length) {
-      const v = window.prompt("Звірка PM не завершена по проєктах: " + reconOpen.map((x) => x.project).join(", ") + ".\nЗатвердити відомості без неї? Вкажіть причину (обов'язково):");
+    if (reconOpen.length || reconUnmatched) {
+      const v = window.prompt("Звірка PM не завершена" + (reconOpen.length ? " по проєктах: " + reconOpen.map((x) => x.project).join(", ") : "") + (reconUnmatched ? "; не віднесено до PM рядків годин: " + reconUnmatched : "") + ".\nЗатвердити відомості без неї? Вкажіть причину (обов'язково):");
       if (v === null) return;
       reason = v.trim();
       if (reason.length < 3) { setToast("Потрібна причина затвердження без звірки PM."); return; }
@@ -534,6 +535,7 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
                 ))}
               </>
             )}
+            {reconLoaded && reconUnmatched > 0 && <span style={{ color: C.warn, fontWeight: 600 }}>· {reconUnmatched} рядків годин не віднесено до жодного PM (немає в Allocate) — розберіть у «Переведення → Звірка PM»</span>}
           </div>
         )}
         <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", marginTop: 8, fontSize: 12.5 }}>
