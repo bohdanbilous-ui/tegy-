@@ -1563,7 +1563,10 @@ export default function TransferDesk() {
       });
       const alloc = days ? roundAlloc(new Map([...raw].map(([p, v]) => [p, v / days]))) : [];
       const kind = !alloc.length ? "немає" : fromData && fromDir ? "змішано" : fromData ? "облік" : "довідник";
-      return { alloc, notes: [...notes], kind };
+      // Чи діє в цьому відрізку переведення (воно має переважати фіксований розподіл з файлу).
+      const transfer = tr.some((t) => !t.cancelled && t.effectiveDate && t.effectiveDate <= to
+        && !(t.temporary && t.returnDate && t.returnDate <= from));
+      return { alloc, notes: [...notes], kind, transfer };
     };
   }
 

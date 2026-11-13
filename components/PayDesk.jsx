@@ -4,7 +4,8 @@
    Звідки береться розподіл людини (за порядком):
      1) «тег як у …» — брати результат іншої людини;
      2) табель / звіт годин / коригування фін. обліку за період;
-     3) фіксований розподіл (вручну або з файлу);
+     3) фіксований розподіл (вручну або з файлу); фікс. «з файлу» поступається переведенню,
+        яке діє в періоді (введений вручну — ні);
      4) розподіл за довідником і переведеннями.
    FPV — окремий довідник людей поза PeopleForce; за замовчуванням fpv-100. */
 import React, { useState, useEffect, useMemo, useRef } from "react";
@@ -133,8 +134,9 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
       const fixedStr = e.payFixed || e.fileFixed || "";
       let parts, source, notes = calc.notes;
       if (calc.kind === "облік" || calc.kind === "змішано") { parts = toParts(calc.alloc); source = "табель"; }
-      else if (fixedStr) { parts = parseFixed(fixedStr).parts.map((p) => ({ ...p, project: p.code })); source = e.payFixed ? "фікс." : "фікс. з файлу"; notes = []; }
-      else { parts = toParts(calc.alloc); source = calc.kind === "довідник" ? "довідник" : "—"; }
+      // Переведення в цьому періоді переважає фіксований розподіл «з файлу» (але не введений вручну).
+      else if (fixedStr && !(calc.transfer && !e.payFixed && calc.alloc.length)) { parts = parseFixed(fixedStr).parts.map((p) => ({ ...p, project: p.code })); source = e.payFixed ? "фікс." : "фікс. з файлу"; notes = []; }
+      else { parts = toParts(calc.alloc); source = calc.kind === "довідник" ? (calc.transfer ? "довідник · переведення" : "довідник") : "—"; }
       list.push({
         id: e.id, kind: "emp", name: fioOf(e), short: e.name, type,
         typeAuto: e.fileType || "",
