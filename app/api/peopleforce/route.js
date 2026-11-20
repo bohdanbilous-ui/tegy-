@@ -4,6 +4,7 @@ import { readState, writeState, readKey, writeKey } from "../../../lib/store";
 import { mergeState, nowISO } from "../../../lib/merge";
 import { whoIs } from "../../../lib/auth";
 import { pfConfigured, pullPeopleForce, applyPeople } from "../../../lib/peopleforce";
+import { staffFromSheet, pullStaffSheet } from "../../../lib/staffsheet";
 import { writePfInn } from "../../../lib/pay";
 import { readChanges, writeChanges, addChanges } from "../../../lib/pfchanges";
 import { allocAt, approvalsFor, asAlloc, sameAlloc, allocText, tagOf } from "../../../lib/alloc";
@@ -11,8 +12,9 @@ import { allocAt, approvalsFor, asAlloc, sameAlloc, allocText, tagOf } from "../
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-/* Синхронізація довідника людей з PeopleForce.
-   GET  з Authorization: Bearer CRON_SECRET — щоденний запуск Vercel Cron (vercel.json).
+/* Синхронізація довідника людей: за замовчуванням з Google Таблиці «Fincore ERP Staff»
+   (STAFF_SOURCE=peopleforce — напряму з PeopleForce). Автоматично — лише раз на добу вночі.
+   GET  з Authorization: Bearer CRON_SECRET — нічний запуск Vercel Cron (vercel.json).
    GET  адміністратора — стан: чи налаштовано і що сталося востаннє.
    POST адміністратора — синхронізувати зараз.
    POST { action: "confirm", id, effectiveDate, alloc?, reason?, note?, applyPosition?, applyDivision? }
@@ -41,22 +43,23 @@ async function admin(request) {
 
 async function run(by) {
   const started = nowISO();
-  if (!pfConfigured()) {
+  const sheet = staffFromSheet();
+  if (!sheet && !pfConfigured()) {
     const last = { at: started, by, ok: false, error: "Не задано PEOPLEFORCE_API_KEY у змінних Vercel." };
     await writeKey(LAST, last);
     return last;
   }
   try {
-    const people = await pullPeopleForce();
+    const people = sheet ? await pullStaffSheet() : await pullPeopleForce();
     const stamp = nowISO();
     const { state, report } = applyPeople((await readState()) || {}, people, kyivToday(), stamp);
     // Перечитуємо стан перед записом: правки, що прийшли за час запиту до PeopleForce, не загубляться.
     const merged = mergeState(state, await readState());
     merged.updatedAt = stamp;
-    merged.updatedBy = "PeopleForce";
+    merged.updatedBy = sheet ? "Таблиця співробітників" : "PeopleForce";
     const changes = report.added.length + report.updated.length + report.left.length + report.returned.length + report.changes.length;
     if (changes) {
-      merged.log = [{ id: "l_pf" + Date.now(), at: stamp, who: "PeopleForce", email: "", action: "синхронізував довідник",
+      merged.log = [{ id: "l_pf" + Date.now(), at: stamp, who: sheet ? "Таблиця співробітників" : "PeopleForce", email: "", action: "синхронізував довідник",
         details: "нових " + report.added.length + ", оновлено " + report.updated.length + ", звільнено " + report.left.length +
           (report.changes.length ? ", змін посади / БЮ " + report.changes.length : "") }, ...(merged.log || [])].slice(0, 300);
     }
@@ -72,7 +75,7 @@ async function run(by) {
     people.forEach((p) => { const id = pfToEmp.get(String(p.pfId)); if (id && p.inn) inn[id] = p.inn; });
     await writePfInn(inn);
     const cut = (a) => a.slice(0, 50);
-    const last = { at: stamp, by, ok: true, total: people.length, added: cut(report.added), updated: cut(report.updated),
+    const last = { at: stamp, by, source: sheet ? "sheet" : "peopleforce", ok: true, total: people.length, added: cut(report.added), updated: cut(report.updated),
       left: cut(report.left), returned: cut(report.returned), skipped: report.skipped, innFound: Object.keys(inn).length,
       changes: cut(report.changes.map((c) => c.name + ": " + describe(c))),
       counts: { added: report.added.length, updated: report.updated.length, left: report.left.length, returned: report.returned.length, changes: report.changes.length } };
@@ -181,13 +184,13 @@ async function decide(body, me) {
 
 export async function GET(request) {
   if (cronOk(request)) {
-    const last = await run("щоденно");
+    const last = await run("вночі");
     return NextResponse.json(last, { status: last.ok ? 200 : 502 });
   }
   const g = await admin(request);
   if (g.res) return g.res;
   const ch = await readChanges();
-  return NextResponse.json({ configured: pfConfigured(), cron: (process.env.CRON_SECRET || "").length >= 16, last: await readKey(LAST), changes: ch.items, buMap: ch.buMap });
+  return NextResponse.json({ configured: staffFromSheet() || pfConfigured(), cron: (process.env.CRON_SECRET || "").length >= 16, last: await readKey(LAST), changes: ch.items, buMap: ch.buMap });
 }
 
 export async function POST(request) {
@@ -197,5 +200,5 @@ export async function POST(request) {
   if (body && ["confirm", "dismiss", "reopen"].includes(body.action)) return decide(body, g.me);
   const last = await run(g.me.name);
   const ch = await readChanges();
-  return NextResponse.json({ configured: pfConfigured(), cron: (process.env.CRON_SECRET || "").length >= 16, last, changes: ch.items, buMap: ch.buMap }, { status: last.ok ? 200 : 502 });
+  return NextResponse.json({ configured: staffFromSheet() || pfConfigured(), cron: (process.env.CRON_SECRET || "").length >= 16, last, changes: ch.items, buMap: ch.buMap }, { status: last.ok ? 200 : 502 });
 }
