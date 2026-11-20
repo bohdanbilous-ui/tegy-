@@ -3760,11 +3760,11 @@ export default function TransferDesk() {
                     </div>
                     {pf && !pf.configured && (
                       <p style={{ margin: "12px 0 0", background: C.warnSoft, borderRadius: 8, padding: "10px 14px", color: C.ink2, fontSize: 12.5 }}>
-                        Не налаштовано. Додайте у Vercel змінну <b>PEOPLEFORCE_API_KEY</b> (PeopleForce → Налаштування → API) і <b>CRON_SECRET</b> для щоденного запуску, потім Redeploy.
+                        Не налаштовано. Додайте у Vercel змінну <b>PEOPLEFORCE_API_KEY</b> (PeopleForce → Налаштування → API) і <b>CRON_SECRET</b> для нічного запуску, потім Redeploy.
                       </p>
                     )}
                     {pf && pf.configured && !pf.cron && (
-                      <p style={{ margin: "12px 0 0", color: C.warn, fontSize: 12.5 }}>Щоденний запуск вимкнено: додайте у Vercel змінну CRON_SECRET (від 16 символів). Кнопка працює й без неї.</p>
+                      <p style={{ margin: "12px 0 0", color: C.warn, fontSize: 12.5 }}>Нічний запуск вимкнено: додайте у Vercel змінну CRON_SECRET (від 16 символів). Кнопка працює й без неї.</p>
                     )}
                     {pf && pf.last && (
                       <div style={{ marginTop: 12, fontSize: 12.5 }}>
