@@ -12,6 +12,7 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
 import Info from "./Info";
 import { reconCall } from "./ReconDesk";
+import PayDashboard from "./PayDashboard";
 
 const C = {
   paper: "#F5F7FB", surface: "#FFFFFF", ink: "#0F172A", ink2: "#334155",
@@ -76,6 +77,10 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
   const [sheetReady, setSheetReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [view, setView] = useState("all");
+  // Головний екран — панель готовності; «До відомостей» перемикає на таблицю.
+  const [dash, setDash] = useState(true);
+  const [pfInfo, setPfInfo] = useState(null);
+  const [syncBusy, setSyncBusy] = useState(false);
   const [query, setQuery] = useState("");
   const [shown, setShown] = useState(80);
   const [showTpl, setShowTpl] = useState(false);
@@ -228,6 +233,21 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
     reconCall(token, "GET", null, perKey).then((x) => { if (!off) setRecon(x); }).catch(() => { if (!off) setRecon(null); });
     return () => { off = true; };
   }, [token, perKey, mode]);
+  useEffect(() => {
+    if (mode !== "pay" || !token) return;
+    fetch("/api/peopleforce", { cache: "no-store", headers: { Authorization: "Bearer " + token } })
+      .then((r) => (r.ok ? r.json() : null)).then((d) => setPfInfo(d)).catch(() => setPfInfo(null));
+  }, [token, mode]);
+  async function syncNow() {
+    setSyncBusy(true);
+    try {
+      const r = await fetch("/api/peopleforce", { method: "POST", cache: "no-store", headers: { Authorization: "Bearer " + token } });
+      const d = await r.json().catch(() => ({}));
+      setPfInfo(d);
+      setToast(d.last && d.last.ok ? "Дані співробітників оновлено." : "Синхронізація не вдалась: " + ((d.last && d.last.error) || "помилка"));
+    } catch (e) { setToast("Синхронізація не вдалась: " + e.message); }
+    finally { setSyncBusy(false); }
+  }
   const reconLoaded = !!(recon && recon.hours);
   const reconOpen = reconLoaded ? recon.summary.filter((x) => x.state !== "confirmed") : [];
   const reconUnmatched = reconLoaded && recon.unmatched ? recon.unmatched.length : 0;
@@ -428,7 +448,17 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
     <div style={{ display: "grid", gap: 20 }}>
       <datalist id="pay-people">{rows.map((r) => <option key={r.id} value={r.name} />)}</datalist>
 
-      {mode === "pay" && (<>
+      {mode === "pay" && dash && (
+        <PayDashboard per={per} setPer={setPer} lastDay={lastDay} included={included} statements={statements}
+          issues={ISSUES.map(([k, l, test]) => ({ k, l, rows: included.filter((r) => r.problems.some(test)) })).filter((x) => x.rows.length)}
+          approval={approval} stale={stale} canEdit={canEdit} reconLoaded={reconLoaded} reconOpen={reconOpen} reconUnmatched={reconUnmatched}
+          lastSend={(pay.sends || []).find((x) => x.key === perKey) || null} perKey={perKey}
+          pfInfo={pfInfo} onSync={pfInfo ? syncNow : null} syncBusy={syncBusy} isAdmin={!!pfInfo}
+          halfText={per.half === 1 ? "01–15" : "16–" + lastDay(per.y, per.m)}
+          onGo={(v) => { setView(v); setDash(false); }} />
+      )}
+      {mode === "pay" && !dash && (<>
+      <div><button className="ghost" onClick={() => setDash(true)}>← Панель готовності</button></div>
       <section style={{ ...card, padding: "16px 20px" }}>
         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ fontWeight: 600, color: C.ink2 }}>Період</span>
