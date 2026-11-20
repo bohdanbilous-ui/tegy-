@@ -932,7 +932,7 @@ export default function TransferDesk() {
         const remote = await api.get({ token: tokenRef.current, name: user.name });
         learnClock(remote._now, sentAt);
         adoptServer(remote);
-        setToast("PeopleForce: нових " + d.last.counts.added + ", оновлено " + d.last.counts.updated + ", звільнено " + d.last.counts.left +
+        setToast((d.last.counts.removed ? "Прибрано дублів: " + d.last.counts.removed + ". " : "") + "Синхронізація: нових " + d.last.counts.added + ", оновлено " + d.last.counts.updated + ", звільнено " + d.last.counts.left +
           (d.last.counts.changes ? ", змін посади / БЮ " + d.last.counts.changes + " — чекають на підтвердження" : "") + ".");
       } else setToast("PeopleForce: " + ((d.last && d.last.error) || "не вдалося"));
     } catch (e) { setToast("PeopleForce: " + e.message); }
@@ -3771,7 +3771,7 @@ export default function TransferDesk() {
                         {pf.last.ok ? (
                           <>
                             <p style={{ margin: 0, color: C.ink2 }}>
-                              Востаннє: {fmtDT(pf.last.at)} ({pf.last.by}) — у PeopleForce {pf.last.total}; нових {pf.last.counts.added}, оновлено {pf.last.counts.updated}, звільнено {pf.last.counts.left}
+                              Востаннє: {fmtDT(pf.last.at)} ({pf.last.by}) — у {pf.last.source === "sheet" ? "таблиці" : "PeopleForce"} {pf.last.total}; нових {pf.last.counts.added}, оновлено {pf.last.counts.updated}, звільнено {pf.last.counts.left}{pf.last.counts.removed ? ", прибрано дублів " + pf.last.counts.removed : ""}{pf.last.counts.restored ? ", відновлено з PF " + pf.last.counts.restored : ""}
                               {pf.last.counts.returned ? ", повернулися " + pf.last.counts.returned : ""}
                               {pf.last.counts.changes ? ", змін посади / БЮ " + pf.last.counts.changes : ""}.
                             </p>

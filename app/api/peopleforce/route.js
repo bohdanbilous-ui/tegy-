@@ -4,7 +4,7 @@ import { readState, writeState, readKey, writeKey } from "../../../lib/store";
 import { mergeState, nowISO } from "../../../lib/merge";
 import { whoIs } from "../../../lib/auth";
 import { pfConfigured, pullPeopleForce, applyPeople } from "../../../lib/peopleforce";
-import { staffFromSheet, pullStaffSheet } from "../../../lib/staffsheet";
+import { staffFromSheet, pullStaffSheet, applySheetPeople } from "../../../lib/staffsheet";
 import { writePfInn } from "../../../lib/pay";
 import { readChanges, writeChanges, addChanges } from "../../../lib/pfchanges";
 import { allocAt, approvalsFor, asAlloc, sameAlloc, allocText, tagOf } from "../../../lib/alloc";
@@ -24,6 +24,7 @@ export const maxDuration = 60;
    POST { action: "reopen", id } — повернути відхилену зміну в роботу. */
 
 const LAST = "peopleforce:last:v1";
+const RK = "peopleforce:repair:v1";
 const kyivToday = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Kyiv" }).format(new Date());
 
 function cronOk(request) {
@@ -41,7 +42,7 @@ async function admin(request) {
   return { me };
 }
 
-async function run(by) {
+async function run(by, manual = false) {
   const started = nowISO();
   const sheet = staffFromSheet();
   if (!sheet && !pfConfigured()) {
@@ -52,12 +53,26 @@ async function run(by) {
   try {
     const people = sheet ? await pullStaffSheet() : await pullPeopleForce();
     const stamp = nowISO();
-    const { state, report } = applyPeople((await readState()) || {}, people, kyivToday(), stamp);
-    // Перечитуємо стан перед записом: правки, що прийшли за час запиту до PeopleForce, не загубляться.
+    let applied;
+    if (sheet) {
+      // Одноразове виправлення невдалого першого імпорту (дублі, збіг за чужим ід): лише з ручного запуску.
+      const prev = await readKey(LAST);
+      let rk = await readKey(RK);
+      // Мітку невдалого прогону зберігаємо окремо: нічний запуск не повинен її затерти.
+      if (!rk && prev && prev.source === "sheet" && prev.repaired === undefined && prev.ok) { rk = { at: prev.at, done: false }; await writeKey(RK, rk); }
+      const repairAt = manual && rk && !rk.done ? rk.at : "";
+      const pfPeople = repairAt && pfConfigured() ? await pullPeopleForce().catch(() => null) : null;
+      applied = applySheetPeople((await readState()) || {}, people, kyivToday(), stamp, { repairAt, pfPeople });
+      applied.repaired = !!repairAt;
+    } else applied = applyPeople((await readState()) || {}, people, kyivToday(), stamp);
+    const { state, report } = applied;
+    if (!report.removed) report.removed = [];
+    if (!report.restored) report.restored = [];
     const merged = mergeState(state, await readState());
+    if (state.deleted) merged.deleted = { ...(merged.deleted || {}), ...state.deleted };
     merged.updatedAt = stamp;
     merged.updatedBy = sheet ? "Таблиця співробітників" : "PeopleForce";
-    const changes = report.added.length + report.updated.length + report.left.length + report.returned.length + report.changes.length;
+    const changes = report.removed.length + report.restored.length + report.added.length + report.updated.length + report.left.length + report.returned.length + report.changes.length;
     if (changes) {
       merged.log = [{ id: "l_pf" + Date.now(), at: stamp, who: sheet ? "Таблиця співробітників" : "PeopleForce", email: "", action: "синхронізував довідник",
         details: "нових " + report.added.length + ", оновлено " + report.updated.length + ", звільнено " + report.left.length +
@@ -70,16 +85,22 @@ async function run(by) {
       await writeChanges(store);
     }
     // ІПН з PeopleForce — в окреме сховище, лише для адміністратора (не в спільний стан).
-    const pfToEmp = new Map((merged.employees || []).filter((e) => e.pfId).map((e) => [String(e.pfId), e.id]));
-    const inn = {};
-    people.forEach((p) => { const id = pfToEmp.get(String(p.pfId)); if (id && p.inn) inn[id] = p.inn; });
+    let inn = {};
+    if (sheet) {
+      const ids = new Set((merged.employees || []).filter((e) => !(merged.deleted || {})["e:" + e.id]).map((e) => e.id));
+      Object.entries(applied.innByEmp || {}).forEach(([id, v]) => { if (ids.has(id)) inn[id] = v; });
+    } else {
+      const pfToEmp = new Map((merged.employees || []).filter((e) => e.pfId).map((e) => [String(e.pfId), e.id]));
+      people.forEach((p) => { const id = pfToEmp.get(String(p.pfId)); if (id && p.inn) inn[id] = p.inn; });
+    }
     await writePfInn(inn);
     const cut = (a) => a.slice(0, 50);
-    const last = { at: stamp, by, source: sheet ? "sheet" : "peopleforce", ok: true, total: people.length, added: cut(report.added), updated: cut(report.updated),
+    const last = { at: stamp, by, source: sheet ? "sheet" : "peopleforce", repaired: !!applied.repaired, removed: cut(report.removed), restored: cut(report.restored), ambiguous: cut(report.ambiguous || []), ok: true, total: people.length, added: cut(report.added), updated: cut(report.updated),
       left: cut(report.left), returned: cut(report.returned), skipped: report.skipped, innFound: Object.keys(inn).length,
       changes: cut(report.changes.map((c) => c.name + ": " + describe(c))),
-      counts: { added: report.added.length, updated: report.updated.length, left: report.left.length, returned: report.returned.length, changes: report.changes.length } };
+      counts: { removed: report.removed.length, restored: report.restored.length, added: report.added.length, updated: report.updated.length, left: report.left.length, returned: report.returned.length, changes: report.changes.length } };
     await writeKey(LAST, last);
+    if (sheet && applied.repaired) await writeKey(RK, { at: (await readKey(RK) || {}).at || "", done: true, doneAt: stamp });
     return last;
   } catch (e) {
     const last = { at: nowISO(), by, ok: false, error: String((e && e.message) || e).slice(0, 300) };
@@ -198,7 +219,7 @@ export async function POST(request) {
   if (g.res) return g.res;
   const body = await request.json().catch(() => ({}));
   if (body && ["confirm", "dismiss", "reopen"].includes(body.action)) return decide(body, g.me);
-  const last = await run(g.me.name);
+  const last = await run(g.me.name, true);
   const ch = await readChanges();
   return NextResponse.json({ configured: staffFromSheet() || pfConfigured(), cron: (process.env.CRON_SECRET || "").length >= 16, last, changes: ch.items, buMap: ch.buMap }, { status: last.ok ? 200 : 502 });
 }
