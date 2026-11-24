@@ -3,6 +3,7 @@
    PM бачить рядки лише своїх проєктів, обирає рішення по відхиленнях і підтверджує звірку.
    Адміністратор додатково завантажує години (тестове джерело) і задає допуск. */
 import React, { useState, useEffect, useCallback } from "react";
+import * as XLSX from "xlsx";
 import Info from "./Info";
 
 const MONTHS = ["Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень", "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень"];
@@ -31,6 +32,45 @@ export async function reconCall(token, method, body, period) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) { const e = new Error(data.error || "HTTP " + res.status); e.status = res.status; throw e; }
   return data;
+}
+
+
+// Назви БЮ з дашборду → проєкти Allocate (використовується, коли у файлі є business_unit замість project).
+const BU_PROJECT = { Checkbox: "Checkbox", GROUP: "MC Checkbox Group", Posbox: "Posbox.ua", "Parabox PL": "Parabox", Taxbox: "Taxbox", Edibox: "Edibox", Navkolo: "Navkolo", Dubidoc: "DubiDoc" };
+const NOT_BU = /^(не змаплено|не розподілено)/i;
+
+/* Файл із годинами за половину місяця (.xlsx/.csv): стовпці employee, project (або business_unit), spent_time.
+   Повертає текст «людина; проєкт; години» для hours-set. Рядки «Не змаплено» / «Не розподілено» пропускаємо. */
+export async function hoursTextFromFile(file) {
+  const wb = /\.csv$/i.test(file.name) ? XLSX.read(await file.text(), { type: "string" }) : XLSX.read(await file.arrayBuffer(), { type: "array" });
+  let rows = [];
+  for (const n of wb.SheetNames) {
+    const r = XLSX.utils.sheet_to_json(wb.Sheets[n], { defval: "" });
+    if (r.length && Object.keys(r[0]).length >= 3) {
+      const keys = Object.keys(r[0]);
+      if (keys.some((k) => /employee|співроб|людина/i.test(k)) && keys.some((k) => /spent|годин|hours/i.test(k) && !/total/i.test(k))) { rows = r; break; }
+    }
+  }
+  if (!rows.length) throw new Error("У файлі не знайшов аркуш зі стовпцями employee, project (або business_unit) і spent_time.");
+  const keys = Object.keys(rows[0]);
+  const kName = keys.find((k) => /employee|співроб|людина/i.test(k));
+  const kProj = keys.find((k) => /^project$|проєкт|проект/i.test(k));
+  const kBu = keys.find((k) => /business_unit|бю/i.test(k));
+  const kTime = keys.find((k) => /spent/i.test(k) && !/total/i.test(k)) || keys.find((k) => /годин|hours/i.test(k));
+  if (!kName || !kTime || (!kProj && !kBu)) throw new Error("Потрібні стовпці: employee, project (або business_unit), spent_time.");
+  const acc = new Map();
+  let skipped = 0;
+  rows.forEach((r) => {
+    const person = String(r[kName] || "").trim();
+    let project = String((kProj ? r[kProj] : r[kBu]) || "").trim();
+    if (!kProj) { if (NOT_BU.test(project)) { skipped++; return; } project = BU_PROJECT[project] || project; }
+    const h = Number(String(r[kTime]).replace(",", ".").replace(/[^\d.\-]/g, "")) || 0;
+    if (!person || !project || h <= 0) return;
+    const k = person + "\u0001" + project;
+    acc.set(k, (acc.get(k) || 0) + h);
+  });
+  const lines = [...acc].map(([k, h]) => { const [p, pr] = k.split("\u0001"); return p + "; " + pr + "; " + (Math.round(h * 100) / 100); });
+  return { text: lines.join("\n"), count: lines.length, skipped };
 }
 
 export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast, onChanged }) {
@@ -79,6 +119,31 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
   const allConfirmed = d.summary.length > 0 && confirmedCount === d.summary.length;
   const canConfirm = d.finished && d.hours && d.summary.length > 0 && !openCount && !allConfirmed;
   const pass = (r) => (filter === "all" ? true : filter === "shared" ? r.shared : isAttn(r));
+  // Огляд по людях (адміністратор): план проти частки годин, «закріплені 100%» із фактом на інших проєктах.
+  const people = (() => {
+    if (!isAdmin) return [];
+    const m = new Map();
+    d.rows.forEach((r) => {
+      const x = m.get(r.employeeId) || { id: r.employeeId, name: r.name, team: r.team, position: r.position, plan: {}, fact: {} };
+      if (r.planPct > 0) x.plan[r.project] = r.planPct;
+      if (r.trackerHours > 0) x.fact[r.project] = r.trackerHours;
+      m.set(r.employeeId, x);
+    });
+    const tol = d.cfg ? d.cfg.tol : 10;
+    return [...m.values()].map((x) => {
+      const total = Object.values(x.fact).reduce((a, v) => a + v, 0);
+      const share = {}; Object.keys(x.fact).forEach((p) => { share[p] = total ? (x.fact[p] * 100) / total : 0; });
+      const planKeys = Object.keys(x.plan);
+      const pinned = planKeys.length === 1 && x.plan[planKeys[0]] >= 99.5 ? planKeys[0] : null;
+      const elsewhere = pinned ? Object.keys(share).filter((p) => p !== pinned && share[p] >= tol).map((p) => ({ project: p, pct: share[p], hours: x.fact[p] })) : [];
+      const offPlan = Object.keys(share).filter((p) => !x.plan[p] && share[p] >= tol && !(pinned && p !== pinned && elsewhere.some((e) => e.project === p)));
+      const noFact = total === 0;
+      const kind = elsewhere.length ? "pinned" : offPlan.length ? "off" : noFact ? "nofact" : "ok";
+      return { ...x, total, share, pinned, elsewhere, offPlan, kind };
+    }).sort((a, b) => ({ pinned: 0, off: 1, nofact: 2, ok: 3 }[a.kind] - { pinned: 0, off: 1, nofact: 2, ok: 3 }[b.kind]) || a.name.localeCompare(b.name, "uk"));
+  })();
+  const flagged = people.filter((x) => x.kind === "pinned" || x.kind === "off");
+  const planTxt = (m) => (Object.keys(m).length ? Object.keys(m).map((p) => p + " " + num(m[p]) + "%").join(" + ") : "—");
   const hint = allConfirmed ? "" : !d.finished ? "Період ще триває — підтвердити можна після його завершення."
     : !d.hours ? "Годин за період ще немає — їх завантажує адміністратор."
     : openCount ? "Оберіть дію по " + openCount + " відхиленнях, і тоді можна підтверджувати." : "Усе перевірено — можна підтверджувати.";
@@ -168,6 +233,7 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
             {chip("attn", "Потрібна увага", attnCount)}
             {chip("all", "Усі", d.rows.length)}
             {chip("shared", "Спільні працівники", sharedCount)}
+            {isAdmin && chip("people", "По людях: розбіжності", flagged.length)}
             {openCount > 0 && <span style={{ color: C.warn, fontSize: 12.5, fontWeight: 600 }}>без рішення: {openCount}</span>}
           </div>
         )}
@@ -184,6 +250,16 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
                 <label style={{ fontSize: 12.5, color: C.muted }}>Години за {label(cur)} — «Прізвище Ім'я; Проєкт; години», по рядку на людину й проєкт
                   <textarea rows={4} value={text} onChange={(e) => setText(e.target.value)} placeholder={"Андрій Тест; Alpha; 64\nAndrii Test; Beta; 24"} style={{ width: "100%", marginTop: 4, fontFamily: "inherit" }} />
                 </label>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", fontSize: 12.5, color: C.muted }}>
+                  <label>Або файл (.xlsx / .csv: employee, project або business_unit, spent_time) за {label(cur)}:{" "}
+                    <input type="file" accept=".xlsx,.csv" onChange={async (e) => {
+                      const f = e.target.files && e.target.files[0]; e.target.value = "";
+                      if (!f) return;
+                      try { const r = await hoursTextFromFile(f); setText(r.text); setToast("Прочитано " + r.count + " рядків" + (r.skipped ? ", пропущено «не змаплено/не розподілено»: " + r.skipped : "") + ". Перевірте період і натисніть «Завантажити години»."); }
+                      catch (err) { setToast(err.message || "Не вдалося прочитати файл."); }
+                    }} />
+                  </label>
+                </div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                   <button className="ghost" disabled={busy || !text.trim()} onClick={async () => { const ok = await post("hours-set", { text }, "Години завантажено"); if (ok) setText(""); }}>Завантажити години</button>
                   {d.hours && <button className="link" style={{ color: C.stop }} disabled={busy} onClick={() => { if (window.confirm("Прибрати завантажені години за цей період? Підтвердження звірки лишаться, але покажуть застарілими.")) post("hours-clear", {}, "Години прибрано"); }}>прибрати завантажене</button>}
@@ -210,6 +286,30 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
         )}
       </section>
 
+      {isAdmin && filter === "people" && (
+        <section style={{ ...card, padding: 0, overflow: "hidden" }}>
+          <div style={{ padding: "10px 14px", borderBottom: "1px solid " + C.lineSoft, color: C.muted, fontSize: 12.5 }}>
+            Усі люди за {label(cur)}: що закріплено в Allocate (план) і як розподілилися години з трекерів. Червоним — людина закріплена на одному проєкті на 100%, а години йдуть і на інші (від {d.cfg ? d.cfg.tol : 10}% своїх годин).
+          </div>
+          {!d.hours ? <p style={{ margin: 0, padding: 14, color: C.muted }}>Годин за період ще немає — завантажте їх у ⚙.</p> : (
+            <div style={{ overflowX: "auto" }}><table>
+              <thead><tr><th>Людина</th><th>План (Allocate)</th><th>Факт (частка годин)</th><th>Що не так</th></tr></thead>
+              <tbody>{people.filter((x) => x.kind !== "ok").map((x) => (
+                <tr key={x.id} style={x.kind === "pinned" ? { background: C.warnSoft } : undefined}>
+                  <td><b>{x.name}</b>{(x.team || x.position) && <div style={{ color: C.muted, fontSize: 12 }}>{[x.team, x.position].filter(Boolean).join(" · ")}</div>}</td>
+                  <td>{planTxt(x.plan)}</td>
+                  <td>{x.total ? Object.keys(x.share).sort((a, b) => x.share[b] - x.share[a]).map((p) => p + " " + num(x.share[p]) + "% (" + num(x.fact[p]) + " год)").join(" + ") : "—"}</td>
+                  <td style={{ fontSize: 12.5 }}>
+                    {x.kind === "pinned" && <b style={{ color: C.warn }}>Закріплений на {x.pinned} 100%, а години ще на: {x.elsewhere.map((e) => e.project + " " + num(e.pct) + "%").join(", ")}</b>}
+                    {x.kind === "off" && <span style={{ color: C.warn }}>Години на проєкті, якого немає в плані: {x.offPlan.map((p) => p + " " + num(x.share[p]) + "%").join(", ")}</span>}
+                    {x.kind === "nofact" && <span style={{ color: C.muted }}>є в плані, але годин у трекері немає</span>}
+                  </td>
+                </tr>))}</tbody>
+            </table></div>
+          )}
+        </section>
+      )}
+
       {d.unmatched && d.unmatched.length > 0 && (
         <details style={{ ...card, padding: "10px 14px", borderColor: "#FED7AA" }} open={isAdmin}>
           <summary style={{ cursor: "pointer", color: C.warn, fontWeight: 600 }}>Години без відповідності в Allocate: {d.unmatched.length}</summary>
@@ -230,11 +330,11 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
         </details>
       )}
 
-      {!Object.keys(byProject).length && (
+      {filter !== "people" && !Object.keys(byProject).length && (
         <section style={{ ...card, padding: 20, color: C.muted }}>На ваших проєктах немає людей за цей період.</section>
       )}
 
-      {Object.keys(byProject).map((project) => {
+      {filter !== "people" && Object.keys(byProject).map((project) => {
         const s = sumOf(project);
         const all = byProject[project];
         const rows = all.filter(pass);

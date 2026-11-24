@@ -16,6 +16,7 @@ import PayDesk from "./PayDesk";
 import PfChanges from "./PfChanges";
 import PmDesk, { LoansAdmin, ReconAdmin } from "./PmDesk";
 import TrackerBook, { TrackerAccounts, identityCall } from "./TrackerBook";
+import { reconCall } from "./ReconDesk";
 
 /* Вхід через Google: NEXT_PUBLIC_GOOGLE_CLIENT_ID і NEXT_PUBLIC_ALLOWED_DOMAIN.
    Токен перевіряється на сервері (app/api/state/route.js). */
@@ -552,6 +553,7 @@ export default function TransferDesk() {
   useEffect(() => { try { setOpenTeams(JSON.parse(localStorage.getItem("allocate-open-teams") || "{}")); } catch (e) { /* немає збереженого */ } }, []);
   const saveOpen = (n) => { try { localStorage.setItem("allocate-open-teams", JSON.stringify(n)); } catch (e) { /* ігноруємо */ } return n; };
   const [units, setUnits] = useState({}); // команда → "pct" | "h"; порожньо — за даними періоду
+  const [sugg, setSugg] = useState({}); // команда → { loading, rows, tol, period } — пропозиція відсотків з годин трекерів
   const [listNote, setListNote] = useState("");
   const [book, setBook] = useState("emp");
   const [empQuery, setEmpQuery] = useState("");
@@ -1154,6 +1156,57 @@ export default function TransferDesk() {
     setEntries((p) => [...p.filter((x) => !add.some((a) => a.id === x.id)), ...add]);
     pushLog("переніс розподіл з попереднього періоду", t.name + ", " + add.length + " " + plural(add.length, "людина", "людини", "людей"));
     setToast("Перенесли " + add.length + " " + plural(add.length, "рядок", "рядки", "рядків"));
+  }
+  /* Пропозиція з годин: беремо факт з трекерів за період (Звірка → завантажені години), рахуємо з нього відсотки
+     й показуємо поруч із тим, що вже внесено. Нічого не пишеться, доки адміністратор не натисне «Застосувати». */
+  async function openSuggest(t) {
+    if (!canEditTeam(t)) return denied("вносити відсотки команди «" + t.name + "»");
+    if (isSubmitted(t)) return setToast("Період уже поданий — спершу відкрийте його.");
+    const key = pKey;
+    setSugg((m) => ({ ...m, [t.id]: { loading: true, rows: [], key } }));
+    try {
+      const d = await reconCall(tokenRef.current, "GET", null, key);
+      if (!d.hours) { setSugg((m) => { const n = { ...m }; delete n[t.id]; return n; }); return setToast("За " + periodLabel(period) + " годин ще не завантажено: Звірка → ⚙ Години."); }
+      const byEmp = {};
+      (d.rows || []).forEach((r) => { if (r.trackerHours > 0) (byEmp[r.employeeId] = byEmp[r.employeeId] || []).push({ project: r.project, hours: r.trackerHours }); });
+      const tol = (d.cfg && d.cfg.tol) || 10;
+      const rows = [];
+      let noHours = 0;
+      teamMembers(t.id).forEach((e) => {
+        if (partRO(e.id)) return;
+        const hours = byEmp[e.id];
+        if (!hours || !hours.length) { noHours++; return; }
+        const sug = hoursToAlloc(hours);
+        const cur = allocIn(e.id, key);
+        const cm = {}, sm = {};
+        cur.forEach((r) => { cm[r.project] = (cm[r.project] || 0) + r.percent; });
+        sug.forEach((r) => { sm[r.project] = r.percent; });
+        const diff = Math.max(0, ...uniq([...Object.keys(cm), ...Object.keys(sm)]).map((p) => Math.abs((cm[p] || 0) - (sm[p] || 0))));
+        const pinned = cur.length === 1 && cur[0].percent >= 99.5 && sug.some((r) => r.project !== cur[0].project && r.percent >= tol);
+        const state = !cur.length ? "new" : diff > tol ? "diff" : "same";
+        rows.push({ id: e.id, name: e.name, hours, sug, cur, diff, pinned, state, pick: state !== "same" });
+      });
+      rows.sort((a, b) => (b.pinned - a.pinned) || ((a.state === "same") - (b.state === "same")) || b.diff - a.diff);
+      setSugg((m) => ({ ...m, [t.id]: { loading: false, rows, tol, key, noHours } }));
+    } catch (err) {
+      setSugg((m) => { const n = { ...m }; delete n[t.id]; return n; });
+      setToast(err.message || "Не вдалося отримати години.");
+    }
+  }
+  function applySuggest(t) {
+    const g = sugg[t.id];
+    if (!g || !canEditTeam(t) || isSubmitted(t) || g.key !== pKey) return;
+    const chosen = g.rows.filter((r) => r.pick && !partRO(r.id));
+    if (!chosen.length) return setToast("Нічого не обрано.");
+    setEntries((p) => {
+      const ids = new Set(chosen.map((r) => entryId(r.id, pKey)));
+      const add = chosen.map((r) => ({ id: entryId(r.id, pKey), periodKey: pKey, employeeId: r.id, hours: r.hours.map((h) => ({ ...h })), alloc: r.sug.map((x) => ({ ...x })), updatedAt: nowISO(), updatedBy: user ? user.name : "" }));
+      return [...p.filter((x) => !ids.has(x.id)), ...add];
+    });
+    setUnits((u) => ({ ...u, [t.id]: "h" }));
+    pushLog("підставив розподіл з годин трекерів", t.name + " · " + periodLabel(period) + ", " + chosen.length + " " + plural(chosen.length, "людина", "людини", "людей"));
+    setToast("Підставили з годин: " + chosen.length + " " + plural(chosen.length, "людина", "людини", "людей") + ". Перевірте й подайте період.");
+    setSugg((m) => { const n = { ...m }; delete n[t.id]; return n; });
   }
   function submitPeriod(t) {
     if (!canEditTeam(t)) return denied("подавати період команди «" + t.name + "»");
@@ -3051,6 +3104,39 @@ export default function TransferDesk() {
                   </div>
 
                   {open && (<>
+                  {sugg[t.id] && (() => {
+                    const g = sugg[t.id];
+                    const diffN = g.rows.filter((r) => r.state !== "same").length, pickN = g.rows.filter((r) => r.pick).length;
+                    const txt = (a) => (a && a.length ? a.map((x) => x.project + " " + round2(x.percent) + "%").join(" + ") : "—");
+                    return (
+                      <div style={{ margin: "0 20px 14px", border: "1px solid " + C.line, borderRadius: 10, background: "#F8FAFC" }}>
+                        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", padding: "10px 14px" }}>
+                          <b>Пропозиція з годин · {periodLabel(period)}</b>
+                          {g.loading ? <span style={{ color: C.muted }}>завантажуємо…</span> : (
+                            <span style={{ color: C.muted, fontSize: 12.5 }}>{g.rows.length} {plural(g.rows.length, "людина", "людини", "людей")} з годинами, розбіжностей (понад {g.tol} п.п.): {diffN}{g.noHours ? " · без годин: " + g.noHours : ""}</span>
+                          )}
+                          <span style={{ marginLeft: "auto", display: "inline-flex", gap: 10 }}>
+                            {!g.loading && <button style={addBtn} disabled={!pickN} onClick={() => applySuggest(t)}>Застосувати до {pickN}</button>}
+                            <button className="link" onClick={() => setSugg((m) => { const n = { ...m }; delete n[t.id]; return n; })}>закрити</button>
+                          </span>
+                        </div>
+                        {!g.loading && g.rows.length > 0 && (
+                          <div style={{ overflowX: "auto" }}><table>
+                            <thead><tr><th style={{ width: 34 }}></th><th>ПІБ</th><th>Зараз у табелі</th><th>З годин трекерів</th><th>Стан</th></tr></thead>
+                            <tbody>{g.rows.map((r) => (
+                              <tr key={r.id} style={r.pinned ? { background: C.warnSoft } : undefined}>
+                                <td><input type="checkbox" checked={r.pick} aria-label={"Підставити для " + r.name} onChange={(e) => setSugg((m) => ({ ...m, [t.id]: { ...g, rows: g.rows.map((x) => (x.id === r.id ? { ...x, pick: e.target.checked } : x)) } }))} /></td>
+                                <td>{r.name}</td>
+                                <td>{txt(r.cur)}</td>
+                                <td>{txt(r.sug)}<div style={{ color: C.muted, fontSize: 11.5 }}>{r.hours.map((h) => h.project + " " + round2(h.hours) + " год").join(" · ")}</div></td>
+                                <td style={{ fontSize: 12.5 }}>{r.pinned ? <b style={{ color: C.warn }}>закріплений на одному проєкті, а години йдуть і на інші</b> : r.state === "new" ? <span style={{ color: C.signal }}>ще не заповнено</span> : r.state === "diff" ? <span style={{ color: C.warn }}>розбіжність {round2(r.diff)} п.п.</span> : <span style={{ color: "#15803D" }}>збігається</span>}</td>
+                              </tr>))}</tbody>
+                          </table></div>
+                        )}
+                        {!g.loading && !g.rows.length && <p style={{ margin: 0, padding: "0 14px 12px", color: C.muted, fontSize: 12.5 }}>Для людей цієї команди в завантажених годинах нічого немає.</p>}
+                      </div>
+                    );
+                  })()}
                   {members.length === 0 ? (
                     <p style={{ padding: "18px 20px", margin: 0, color: C.muted }}>
                       {isAdmin ? "До команди ще нікого не прикріплено. Внизу є поле «Прикріпити людину» — у підказках ті, хто ще не в жодній команді." : "До команди ще нікого не прикріплено — людей додає адміністратор."}
@@ -3144,6 +3230,7 @@ export default function TransferDesk() {
                       {!sub ? (
                         <>
                           <button className="ghost" onClick={() => copyPrevPeriod(t)}>Перенести з попереднього періоду</button>
+                          <button className="ghost" onClick={() => openSuggest(t)} title="Відсотки з годин трекерів за цей період: спершу покаже різницю з тим, що вже внесено">Запропонувати з годин</button>
                           {members.length > 0 && <button style={addBtn} onClick={() => submitPeriod(t)}>Подати період</button>}
                         </>
                       ) : (
