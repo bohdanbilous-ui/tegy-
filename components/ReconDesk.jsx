@@ -208,8 +208,47 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
     </td></tr>
   );
 
+  const step = (n, title, body) => (
+    <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+      <span style={{ flex: "0 0 24px", height: 24, borderRadius: 12, background: C.signal, color: "#fff", display: "grid", placeItems: "center", fontSize: 13, fontWeight: 700 }}>{n}</span>
+      <div style={{ display: "grid", gap: 4 }}><b style={{ fontSize: 14 }}>{title}</b><div style={{ fontSize: 13, color: C.ink2 }}>{body}</div></div>
+    </div>
+  );
+
   return (
     <>
+      {isAdmin && (
+        <section style={{ ...card, padding: 16, display: "grid", gap: 12, borderColor: d.hours ? C.line : C.signal }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
+            <h2 style={{ margin: 0, fontSize: 17 }}>Відсотки з годин трекерів</h2>
+            <span style={{ color: C.muted, fontSize: 13 }}>тричі за місяць: 01–15 і 16–кінець місяця</span>
+          </div>
+          {step(1, "Оберіть період", <>Зараз: <b>{label(cur)}</b>. Інший період оберіть у списку «Період» нижче.</>)}
+          {step(2, "Завантажте файл з годинами", (
+            <div style={{ display: "grid", gap: 6 }}>
+              <span>Вигрузка з дашборду за цей період (.xlsx або .csv). Файл одразу завантажиться за <b>{label(cur)}</b>.</span>
+              <span>
+                <input type="file" accept=".xlsx,.csv" disabled={busy} aria-label="Файл з годинами" onChange={async (e) => {
+                  const f = e.target.files && e.target.files[0]; e.target.value = "";
+                  if (!f) return;
+                  try {
+                    const r = await hoursTextFromFile(f);
+                    if (!r.count) return setToast("У файлі немає годин для завантаження.");
+                    const ok = await post("hours-set", { text: r.text });
+                    if (ok) setToast("Завантажено " + r.count + " рядків за " + label(cur) + (r.skipped ? " (пропущено «Не змаплено»: " + r.skipped + ")" : "") + ". Далі — крок 3.");
+                  } catch (err) { setToast(err.message || "Не вдалося прочитати файл."); }
+                }} />
+              </span>
+              <span style={{ color: d.hours ? "#15803D" : C.warn, fontWeight: 600 }}>
+                {d.hours ? "✓ Години завантажено: " + d.hours.count + " рядків, " + fmtDT(d.hours.at) + ". Новий файл замінить їх." : "Годин за цей період ще немає."}
+              </span>
+              {d.unmatched && d.unmatched.length > 0 && <span style={{ color: C.warn }}>Не впізнано {d.unmatched.length} {d.unmatched.length === 1 ? "рядок" : "рядків"} (ім'я або проєкт) — вони внизу, в розділі з невпізнаними.</span>}
+            </div>
+          ))}
+          {step(3, "Відкрийте Табель і натисніть «Запропонувати з годин»", "Біля кожної команди є ця кнопка. Allocate покаже, що вже внесено і що виходить з годин; нічого не зберігається, доки ви не натиснете «Застосувати». Після цього перевірте й подайте період як зазвичай.")}
+          {step(4, "Подивіться розбіжності", <>Кнопка «По людях: розбіжності» нижче покаже, хто закріплений на одному проєкті, а годин має ще й на інших.</>)}
+        </section>
+      )}
       <section style={{ ...card, padding: 14, display: "grid", gap: 10 }}>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <h2 style={{ margin: 0, fontSize: 17 }}>Звірка</h2>
@@ -246,7 +285,7 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
         </Info>
         {isAdmin && (
           <div style={{ borderTop: "1px solid " + C.lineSoft, paddingTop: 8 }}>
-            <button className="link" aria-expanded={showSettings} onClick={() => setShowSettings((v) => !v)}>⚙ Години, відповідність імен, допуск {showSettings ? "▴" : "▾"}</button>
+            <button className="link" aria-expanded={showSettings} onClick={() => setShowSettings((v) => !v)}>⚙ Додатково: ввести години текстом, імена, допуск {showSettings ? "▴" : "▾"}</button>
             {showSettings && (
               <div style={{ display: "grid", gap: 12, marginTop: 10 }}>
                 <label style={{ fontSize: 12.5, color: C.muted }}>Години за {label(cur)} — «Прізвище Ім'я; Проєкт; години», по рядку на людину й проєкт
