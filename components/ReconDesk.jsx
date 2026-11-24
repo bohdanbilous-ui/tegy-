@@ -126,8 +126,9 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
     const m = new Map();
     d.rows.forEach((r) => {
       const x = m.get(r.employeeId) || { id: r.employeeId, name: r.name, team: r.team, position: r.position, plan: {}, fact: {} };
-      if (r.planPct > 0) x.plan[r.project] = r.planPct;
-      if (r.trackerHours > 0) x.fact[r.project] = r.trackerHours;
+      const pr = r.project === "Parabox" || r.project === "Posbox.pl" ? "Parabox / Posbox.pl" : r.project; // це один проєкт під двома назвами
+      if (r.planPct > 0) x.plan[pr] = (x.plan[pr] || 0) + r.planPct;
+      if (r.trackerHours > 0) x.fact[pr] = (x.fact[pr] || 0) + r.trackerHours;
       m.set(r.employeeId, x);
     });
     const tol = d.cfg ? d.cfg.tol : 10;
