@@ -36,7 +36,7 @@ export async function reconCall(token, method, body, period) {
 
 
 // Назви БЮ з дашборду → проєкти Allocate (використовується, коли у файлі є business_unit замість project).
-const BU_PROJECT = { Checkbox: "Checkbox", GROUP: "MC Checkbox Group", Posbox: "Posbox.ua", "Parabox PL": "Parabox", Taxbox: "Taxbox", Edibox: "Edibox", Navkolo: "Navkolo", Dubidoc: "DubiDoc" };
+const BU_PROJECT = { Checkbox: "Checkbox", GROUP: "MC Checkbox Group", Posbox: "Posbox.ua", "Parabox PL": "Parabox", Taxbox: "Taxbox", Edibox: "Edibox", EDI: "Edibox", KZ: "KZ", Navkolo: "Navkolo", Dubidoc: "DubiDoc" };
 const NOT_BU = /^(не змаплено|не розподілено)/i;
 
 /* Файл із годинами за половину місяця (.xlsx/.csv): стовпці employee, project (або business_unit), spent_time.
