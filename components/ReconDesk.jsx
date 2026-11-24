@@ -63,7 +63,8 @@ export async function hoursTextFromFile(file) {
   rows.forEach((r) => {
     const person = String(r[kName] || "").trim();
     let project = String((kProj ? r[kProj] : r[kBu]) || "").trim();
-    if (!kProj) { if (NOT_BU.test(project)) { skipped++; return; } project = BU_PROJECT[project] || project; }
+    if (NOT_BU.test(project)) { skipped++; return; }
+    project = BU_PROJECT[project] || project; // EDI → Edibox, KZ → KZ тощо, і для стовпця project, і для business_unit
     const h = Number(String(r[kTime]).replace(",", ".").replace(/[^\d.\-]/g, "")) || 0;
     if (!person || !project || h <= 0) return;
     const k = person + "\u0001" + project;
@@ -125,8 +126,9 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
     const m = new Map();
     d.rows.forEach((r) => {
       const x = m.get(r.employeeId) || { id: r.employeeId, name: r.name, team: r.team, position: r.position, plan: {}, fact: {} };
-      if (r.planPct > 0) x.plan[r.project] = r.planPct;
-      if (r.trackerHours > 0) x.fact[r.project] = r.trackerHours;
+      const pr = r.project === "Parabox" || r.project === "Posbox.pl" ? "Parabox / Posbox.pl" : r.project; // це один проєкт під двома назвами
+      if (r.planPct > 0) x.plan[pr] = (x.plan[pr] || 0) + r.planPct;
+      if (r.trackerHours > 0) x.fact[pr] = (x.fact[pr] || 0) + r.trackerHours;
       m.set(r.employeeId, x);
     });
     const tol = d.cfg ? d.cfg.tol : 10;
@@ -289,12 +291,12 @@ export default function ReconDesk({ token, C, card, addBtn, onApiError, setToast
       {isAdmin && filter === "people" && (
         <section style={{ ...card, padding: 0, overflow: "hidden" }}>
           <div style={{ padding: "10px 14px", borderBottom: "1px solid " + C.lineSoft, color: C.muted, fontSize: 12.5 }}>
-            Усі люди за {label(cur)}: що закріплено в Allocate (план) і як розподілилися години з трекерів. Червоним — людина закріплена на одному проєкті на 100%, а години йдуть і на інші (від {d.cfg ? d.cfg.tol : 10}% своїх годин).
+            Усі люди за {label(cur)}: що закріплено в Allocate (план) і як розподілилися години з трекерів. Показано лише розбіжності; люди без годин у трекері ({people.filter((x) => x.kind === "nofact").length}) не перелічені. Червоним — людина закріплена на одному проєкті на 100%, а години йдуть і на інші (від {d.cfg ? d.cfg.tol : 10}% своїх годин).
           </div>
           {!d.hours ? <p style={{ margin: 0, padding: 14, color: C.muted }}>Годин за період ще немає — завантажте їх у ⚙.</p> : (
             <div style={{ overflowX: "auto" }}><table>
               <thead><tr><th>Людина</th><th>План (Allocate)</th><th>Факт (частка годин)</th><th>Що не так</th></tr></thead>
-              <tbody>{people.filter((x) => x.kind !== "ok").map((x) => (
+              <tbody>{people.filter((x) => x.kind === "pinned" || x.kind === "off").map((x) => (
                 <tr key={x.id} style={x.kind === "pinned" ? { background: C.warnSoft } : undefined}>
                   <td><b>{x.name}</b>{(x.team || x.position) && <div style={{ color: C.muted, fontSize: 12 }}>{[x.team, x.position].filter(Boolean).join(" · ")}</div>}</td>
                   <td>{planTxt(x.plan)}</td>

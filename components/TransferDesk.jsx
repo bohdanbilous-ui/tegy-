@@ -1174,10 +1174,18 @@ export default function TransferDesk() {
       let noHours = 0;
       teamMembers(t.id).forEach((e) => {
         if (partRO(e.id)) return;
-        const hours = byEmp[e.id];
-        if (!hours || !hours.length) { noHours++; return; }
-        const sug = hoursToAlloc(hours);
         const cur = allocIn(e.id, key);
+        // Parabox і Posbox.pl — один проєкт під двома назвами: години йдуть у ту назву, що вже стоїть у людини.
+        const isPl = (n) => n === "Parabox" || n === "Posbox.pl";
+        const plName = (cur.find((r) => isPl(r.project)) || {}).project;
+        const hours = (byEmp[e.id] || []).reduce((acc, h) => {
+          const name = isPl(h.project) && plName ? plName : h.project;
+          const f = acc.find((x) => x.project === name);
+          if (f) f.hours += h.hours; else acc.push({ project: name, hours: h.hours });
+          return acc;
+        }, []);
+        if (!hours.length) { noHours++; return; }
+        const sug = hoursToAlloc(hours);
         const cm = {}, sm = {};
         cur.forEach((r) => { cm[r.project] = (cm[r.project] || 0) + r.percent; });
         sug.forEach((r) => { sm[r.project] = r.percent; });
