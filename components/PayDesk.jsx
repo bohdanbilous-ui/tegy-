@@ -179,7 +179,7 @@ export default function PayDesk({ employees, setEmployees, fpv, setFpv, settings
       if (!inn[r.id]) prob.push("немає ІПН");
       else {
         if (inn[r.id].bad) prob.push("ІПН: " + inn[r.id].bad);
-        const twins = (inn[r.id].dupWith || []).map((id) => (nameById.get(id) || "")).filter(Boolean);
+        const twins = (inn[r.id].dupWith || []).filter((id) => { const o = byId.get(id); return !o || !o.off; }).map((id) => (nameById.get(id) || "")).filter(Boolean);
         if (twins.length) prob.push("ІПН збігається з: " + twins.join(", "));
       }
       if (!r.legal) prob.push("немає юрособи");
