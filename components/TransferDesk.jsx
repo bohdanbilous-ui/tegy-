@@ -1166,7 +1166,7 @@ export default function TransferDesk() {
     setSugg((m) => ({ ...m, [t.id]: { loading: true, rows: [], key } }));
     try {
       const d = await reconCall(tokenRef.current, "GET", null, key);
-      if (!d.hours) { setSugg((m) => { const n = { ...m }; delete n[t.id]; return n; }); return setToast("За " + periodLabel(period) + " годин ще не завантажено: Звірка → ⚙ Години."); }
+      if (!d.hours) { setSugg((m) => { const n = { ...m }; delete n[t.id]; return n; }); return setToast("За " + periodLabel(period) + " годин ще не завантажено. Спершу завантажте файл: Переведення → Звірка PM → «Відсотки з годин трекерів», крок 2."); }
       const byEmp = {};
       (d.rows || []).forEach((r) => { if (r.trackerHours > 0) (byEmp[r.employeeId] = byEmp[r.employeeId] || []).push({ project: r.project, hours: r.trackerHours }); });
       const tol = (d.cfg && d.cfg.tol) || 10;
